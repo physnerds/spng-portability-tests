@@ -1,0 +1,44 @@
+spack:
+  repos:
+    - /opt/wire-cell-spack/spack_repo/wirecell
+
+  specs:
+    - wire-cell-toolkit@spng +cuda +torch cuda_arch=89 %gcc@11.5.0
+
+  view: /opt/wirecell-view
+
+  concretizer:
+    unify: true
+    reuse: false
+
+  packages:
+    all:
+      target: [x86_64]
+
+    gcc:
+      externals:
+        - spec: gcc@11.5.0 languages='c,c++,fortran'
+          prefix: /usr
+          extra_attributes:
+            compilers:
+              c: /usr/bin/gcc
+              cxx: /usr/bin/g++
+              fortran: /usr/bin/gfortran
+      buildable: false
+
+    cuda:
+      externals:
+        - spec: cuda@12.4
+          prefix: /usr/local/cuda
+      buildable: false
+
+  config:
+    install_tree:
+      root: /opt/spack-install
+
+    source_cache: /opt/spack-cache/source
+    misc_cache: /opt/spack-cache/misc
+    test_stage: /opt/spack-cache/test
+
+    build_stage:
+      - /opt/spack-stage
