@@ -32,11 +32,10 @@ ENV PATH=/opt/spack/bin:/usr/local/cuda/bin:${PATH}
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
 
 # Base build tools only. WireCell dependencies are installed by Spack.
-RUN dnf install -y \
+RUN dnf --disablerepo=cuda install -y \
         bash \
         bzip2 \
         ca-certificates \
-        curl \
         file \
         findutils \
         gcc \
@@ -53,13 +52,16 @@ RUN dnf install -y \
         unzip \
         which \
         xz \
-    && dnf clean all
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
 
 # Verify the expected system compiler.
 RUN gcc --version \
     && g++ --version \
     && gfortran --version \
-    && nvcc --version
+    && nvcc --version    \
+    && curl --version \ 
+    && python3 --version 
 
 # Install a private pinned Spack checkout.
 RUN git clone https://github.com/spack/spack.git "${SPACK_ROOT}" \
@@ -101,7 +103,7 @@ RUN source "${SPACK_ROOT}/share/spack/setup-env.sh" \
 
 # Make compiler discovery environment-local.
 RUN source "${SPACK_ROOT}/share/spack/setup-env.sh" \
-    && spack -e /opt/wirecell-env compiler find --scope env /usr \
+    && spack -e /opt/wirecell-env compiler find --scope env:/opt/wirecell-env \
     && spack -e /opt/wirecell-env compilers
 
 # Concretize without consulting packages from other Spack installations.
