@@ -1,0 +1,117 @@
+# syntax=docker/dockerfile:1.7
+
+ARG CUDA_IMAGE=nvidia/cuda:12.4.1-devel-rockylinux9
+FROM ${CUDA_IMAGE}
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+ARG SPACK_REF=v1.0.0
+ARG WIRECELL_SPACK_REF=master
+ARG USE_CUSTOM_PACKAGE=false
+
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+
+ENV HTTP_PROXY=${HTTP_PROXY}
+ENV HTTPS_PROXY=${HTTPS_PROXY}
+ENV NO_PROXY=${NO_PROXY}
+ENV http_proxy=${HTTP_PROXY}
+ENV https_proxy=${HTTPS_PROXY}
+ENV no_proxy=${NO_PROXY}
+
+ENV SPACK_ROOT=/opt/spack
+ENV SPACK_USER_CACHE_PATH=/opt/spack-cache/user
+ENV SPACK_DISABLE_LOCAL_CONFIG=true
+
+ENV PATH=/opt/spack/bin:/usr/local/cuda/bin:${PATH}
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+
+RUN dnf --disablerepo=cuda install -y \
+        bash \
+        bzip2 \
+        ca-certificates \
+        file \
+        findutils \
+        gcc \
+        gcc-c++ \
+        gcc-gfortran \
+        git \
+        gzip \
+        hostname \
+        make \
+        patch \
+        python3 \
+        python3-pip \
+        tar \
+        unzip \
+        which \
+        xz \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+RUN gcc --version \
+    && g++ --version \
+    && gfortran --version \
+    && nvcc --version \
+    && curl --version
+
+RUN git clone https://github.com/spack/spack.git "${SPACK_ROOT}" \
+    && git -C "${SPACK_ROOT}" checkout "${SPACK_REF}"
+
+RUN git clone \
+        https://github.com/WireCell/wire-cell-spack.git \
+        /opt/wire-cell-spack \
+    && git -C /opt/wire-cell-spack checkout "${WIRECELL_SPACK_REF}"
+
+# package.py remains optional. The directory itself must exist.
+COPY wirecell-package/ /tmp/wirecell-package/
+
+RUN set -euo pipefail; \
+    destination="/opt/wire-cell-spack/spack_repo/wirecell/packages/wire_cell_toolkit/package.py"; \
+    override="/tmp/wirecell-package/package.py"; \
+    if [[ "${USE_CUSTOM_PACKAGE}" == "true" ]]; then \
+        test -f "${override}" || { \
+            echo "USE_CUSTOM_PACKAGE=true but package.py is missing"; \
+            exit 1; \
+        }; \
+        cp "${override}" "${destination}"; \
+        echo "Installed custom package.py"; \
+    else \
+        echo "Using upstream package.py"; \
+    fi; \
+    rm -rf /tmp/wirecell-package
+
+RUN mkdir -p \
+        /opt/wirecell-env \
+        /opt/wirecell-view \
+        /opt/spack-install \
+        /opt/spack-cache \
+        /opt/spack-stage
+
+COPY spack.yaml /opt/wirecell-env/spack.yaml
+
+RUN source "${SPACK_ROOT}/share/spack/setup-env.sh" \
+    && spack -e /opt/wirecell-env compiler find \
+        --scope env:/opt/wirecell-env \
+        /usr \
+    && spack -e /opt/wirecell-env compilers
+
+RUN source "${SPACK_ROOT}/share/spack/setup-env.sh" \
+    && spack -e /opt/wirecell-env concretize --fresh \
+    && spack -e /opt/wirecell-env spec -Il
+
+# Install LLVM, PyTorch, Boost, FFTW, and all other dependencies,
+# but do not install wire-cell-toolkit itself.
+RUN --mount=type=cache,target=/opt/spack-cache \
+    --mount=type=cache,target=/opt/spack-stage \
+    source "${SPACK_ROOT}/share/spack/setup-env.sh" \
+    && spack -e /opt/wirecell-env install \
+        --only dependencies \
+        --fail-fast \
+        --show-log-on-error \
+        --no-checksum
+
+RUN source "${SPACK_ROOT}/share/spack/setup-env.sh" \
+    && echo "Dependency image contents:" \
+    && spack -e /opt/wirecell-env find -dlv
