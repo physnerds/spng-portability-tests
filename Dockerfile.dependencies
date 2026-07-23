@@ -33,6 +33,7 @@ RUN dnf --disablerepo=cuda install -y \
         ca-certificates \
         file \
         findutils \
+        diffutils \
         gcc \
         gcc-c++ \
         gcc-gfortran \
