@@ -25,7 +25,7 @@ The build does not use a host-side Spack installation or packages installed by a
 ├── entrypoint.sh #Docker uses this script to setup wire-cell related environment variables.
 ├── run-container.sh # Launch this bash script to run the wire-cell-toolkit/spng container. 
 ├── setup-wirecell.sh #Obsolete but you can use this in the container to setup environment variables needed to launch apps fron jsonnet files. 
-├── spack.yaml
+├── spack.yaml # spack.yaml is used to do spack build of wire-cell depdendencies using Dockerfile.dependencies.
 └── wirecell-package/ # Obsolete. We do not use spack based wire-cell-toolkit build.
     └── package.py        # optional
 ```
