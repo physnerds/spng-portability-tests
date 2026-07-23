@@ -7,7 +7,6 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ARG SPACK_REF=v1.0.0
 ARG WIRECELL_SPACK_REF=master
-ARG USE_CUSTOM_PACKAGE=false
 
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
@@ -65,23 +64,6 @@ RUN git clone \
         /opt/wire-cell-spack \
     && git -C /opt/wire-cell-spack checkout "${WIRECELL_SPACK_REF}"
 
-# package.py remains optional. The directory itself must exist.
-COPY wirecell-package/ /tmp/wirecell-package/
-
-RUN set -euo pipefail; \
-    destination="/opt/wire-cell-spack/spack_repo/wirecell/packages/wire_cell_toolkit/package.py"; \
-    override="/tmp/wirecell-package/package.py"; \
-    if [[ "${USE_CUSTOM_PACKAGE}" == "true" ]]; then \
-        test -f "${override}" || { \
-            echo "USE_CUSTOM_PACKAGE=true but package.py is missing"; \
-            exit 1; \
-        }; \
-        cp "${override}" "${destination}"; \
-        echo "Installed custom package.py"; \
-    else \
-        echo "Using upstream package.py"; \
-    fi; \
-    rm -rf /tmp/wirecell-package
 
 RUN mkdir -p \
         /opt/wirecell-env \

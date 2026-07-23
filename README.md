@@ -15,18 +15,18 @@ The build does not use a host-side Spack installation or packages installed by a
 .
 ├── .dockerignore
 ├── .gitignore
-├── Dockerfile
-├── Dockerfile.dependencies
-├── README.md
-├── STATUS.md
-├── bootstrap.sh
-├── build-dependencies.sh
-├── build-image.sh
-├── entrypoint.sh
-├── run-container.sh
-├── setup-wirecell.sh
+├── Dockerfile # Dockerfile that builds wire-cell-toolkit based upon the image created from Dockerfile.dependencies
+├── Dockerfile.dependencies #Base image that builds dependencies needed for wire-cell-toolkit
+├── README.md # This file
+├── STATUS.md # Few initial errors when building image were recorded here but not maintained. 
+├── bootstrap.sh # One shot script to build wire-cell-toolkit (Two step build process)
+├── build-dependencies.sh # Builds the image that contains dependencies for wire-cell
+├── build-image.sh #Builds the container with wire-cell-toolkit installed. 
+├── entrypoint.sh #Docker uses this script to setup wire-cell related environment variables.
+├── run-container.sh # Launch this bash script to run the wire-cell-toolkit/spng container. 
+├── setup-wirecell.sh #Obsolete but you can use this in the container to setup environment variables needed to launch apps fron jsonnet files. 
 ├── spack.yaml
-└── wirecell-package/
+└── wirecell-package/ # Obsolete. We do not use spack based wire-cell-toolkit build.
     └── package.py        # optional
 ```
 
@@ -46,56 +46,6 @@ The default image tag is:
 ```
 wirecell-spng:cuda89
 ```
-By default, the build uses the `package.py` provided by the cloned `wire-cell-spack` repository.
-
-## Docker network workaround
-Some Docker installations may fail to resolve the Rocky Linux package mirrors during the `dnf install` step:
-
-```
-Failed to download metadata for repo 'baseos'
-Curl error (28): Timeout was reached
-```
-The affected URL can be tested with:
-
-```
-sudo docker run --rm \
-    nvidia/cuda:12.4.1-devel-rockylinux9 \
-    curl -v --connect-timeout 30 \
-    'https://mirrors.rockylinux.org/mirrorlist?arch=x86_64&repo=BaseOS-9'
-```
-When the default Docker build network cannot reach the mirror, build using the host network:
-
-```
-DOCKER_BUILD_NETWORK=host ./bootstrap.sh
-```
-When Docker requires elevated privileges:
-
-```
-sudo -E env \
-    DOCKER_BUILD_NETWORK=host \
-    ./bootstrap.sh
-```
-The `-E` option preserves environment variables such as site-specific proxy settings.
-
-## Build with a custom `package.py`
-Place the custom recipe at:
-
-```
-wirecell-package/package.py
-```
-Then run:
-
-```
-USE_CUSTOM_PACKAGE=true ./bootstrap.sh
-```
-To combine the custom recipe with the Docker host-network workaround:
-
-```
-USE_CUSTOM_PACKAGE=true \
-DOCKER_BUILD_NETWORK=host \
-./bootstrap.sh
-```
-Custom package mode may be used for recipe changes such as an added `+nvtx` variant or changes to WireCell patch conditions.
 
 ## Building without a GPU
 An NVIDIA GPU is not required to build the image.
@@ -150,6 +100,17 @@ print("CUDA available:", torch.cuda.is_available())
 if torch.cuda.is_available():
     print("GPU:", torch.cuda.get_device_name(0))
 '
+```
+
+# Building the wire-cell-toolkit on existing wirecell-spng:cuda89 container
+Rebuilding the wirecellospng:cuda89 is very time consuming since it builds everything from scratch including llvm, torch and cuda toolkit. 
+So, if you want to test different variant of wire-cell-tookit only, just run the `build-image.sh` script. 
+```bash
+./build-image.sh # Caching is on. Previous Docker builds are cached during current build session
+```
+
+```bash
+NO_CACHE=true ./build-image.sh # Caching is off. Previous Docker builds are not cached. So, the build session starts from the beginning. 
 ```
 
 ## CUDA version consistency
@@ -237,4 +198,4 @@ docker run --rm \
         wire-cell --version
     '
 ```
-Additional runtime, profiling, troubleshooting, proxy, image-transfer, and Spack lockfile instructions are documented in `Instructions.md`.
+
