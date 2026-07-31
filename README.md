@@ -199,3 +199,10 @@ docker run --rm \
     '
 ```
 
+## Downloading the existing container
+You can download the existing wire-cell container from the dockerhub:
+```bash
+docker pull abashyal/wirecell-spng:cuda89
+```
+Find more info at [dockerhub](https://hub.docker.com/r/abashyal/wirecell-spng).
+
