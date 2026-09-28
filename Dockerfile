@@ -151,6 +151,7 @@ RUN --mount=type=cache,target=/opt/spack-cache \
         --with-bzip2-lib="${BZIP2_LIBDIR}" \
         --with-bzip2-libs=bz2 \
         --with-cuda="${CUDA_TARGET}" \
+	    --with-spng=yes \
         --with-libtorch="${TDIR}" \
         --with-libtorch-include="${TDIR}/include,${TDIR}/include/torch/csrc/api/include,${CUDA_TARGET}/include" \
         --with-libtorch-lib="${TDIR}/lib,${CUDA_LIBDIR}"; \
