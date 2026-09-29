@@ -3,7 +3,33 @@ spack:
     - /opt/wire-cell-spack/spack_repo/wirecell
 
   specs:
-    - wire-cell-toolkit@spng +cuda +torch cuda_arch=89 %gcc@11.5.0
+    # Match the dependency variants from the working cuda89
+    # Wire-Cell SPNG environment as closely as possible.
+    #
+    # PyTorch is intentionally NOT installed by Spack.
+    # CUDA is supplied by the NERSC PyTorch base image.
+
+    - boost@1.90.0 +atomic +chrono +date_time +exception +filesystem +graph +iostreams +math +program_options +random +regex +serialization +shared +system +thread +multithreaded cxxstd=17 %gcc@11.4.0
+
+    - eigen@5.0.1 ~blas ~ipo ~lapack ~nightly ~rocm %gcc@11.4.0
+
+    - fftw@3.3.11 ~mpi ~openmp ~pfft_patches +shared precision=double,float %gcc@11.4.0
+
+    - fmt@8.1.1 ~ipo +pic +shared cxxstd=11 %gcc@11.4.0
+
+    - go-jsonnet@0.22.0 +python +shared %gcc@11.4.0
+
+    - intel-tbb@2023.1.0 ~ipo +shared +tm %gcc@11.4.0
+
+    - jsoncpp@1.9.6 ~ipo %gcc@11.4.0
+
+    - pkgconf@2.5.1 %gcc@11.4.0
+
+    - spdlog@1.10.0 ~ipo +shared cxxstd=14 %gcc@11.4.0
+
+    - wire-cell-data@0.2.0
+
+    - zlib-ng@2.3.3 +compat +new_strategies +opt +pic +shared %gcc@11.4.0
 
   view: /opt/wirecell-view
 
@@ -17,7 +43,7 @@ spack:
 
     gcc:
       externals:
-        - spec: gcc@11.5.0 languages='c,c++,fortran'
+        - spec: gcc@11.4.0 languages='c,c++,fortran'
           prefix: /usr
           extra_attributes:
             compilers:
@@ -28,17 +54,15 @@ spack:
 
     cuda:
       externals:
-        - spec: cuda@12.4
+        - spec: cuda@12.6
           prefix: /usr/local/cuda
       buildable: false
 
   config:
     install_tree:
       root: /opt/spack-install
-
     source_cache: /opt/spack-cache/source
     misc_cache: /opt/spack-cache/misc
     test_stage: /opt/spack-cache/test
-
     build_stage:
       - /opt/spack-stage

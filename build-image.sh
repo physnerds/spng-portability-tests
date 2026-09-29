@@ -5,13 +5,16 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${PROJECT_DIR}"
 
-DEPENDENCY_IMAGE="${DEPENDENCY_IMAGE:-wirecell-spng-deps:cuda89}"
+DEPENDENCY_IMAGE="${DEPENDENCY_IMAGE:-wirecell-spng-deps:perlmutter}"
+
 IMAGE_NAME="${IMAGE_NAME:-wirecell-spng}"
-IMAGE_TAG="${IMAGE_TAG:-cuda89}"
+IMAGE_TAG="${IMAGE_TAG:-perlmutter}"
+
 WCT_REPOSITORY="${WCT_REPOSITORY:-https://github.com/WireCell/wire-cell-toolkit.git}"
 WCT_REF="${WCT_REF:-spng}"
+
 BUILD_JOBS="${BUILD_JOBS:-16}"
-DOCKER_BUILD_NETWORK="${DOCKER_BUILD_NETWORK:-default}"
+PODMAN_BUILD_NETWORK="${PODMAN_BUILD_NETWORK:-host}"
 NO_CACHE="${NO_CACHE:-false}"
 
 if ! [[ "${BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]]; then
@@ -27,27 +30,25 @@ case "${NO_CACHE}" in
         ;;
 esac
 
-if docker info >/dev/null 2>&1; then
-    DOCKER=(docker)
-elif sudo docker info >/dev/null 2>&1; then
-    DOCKER=(sudo docker)
-else
-    echo "ERROR: Cannot access the Docker daemon."
-    echo "Try: sudo docker info"
+if ! command -v podman-hpc >/dev/null 2>&1; then
+    echo "ERROR: podman-hpc is not available."
     exit 1
 fi
 
-if ! "${DOCKER[@]}" image inspect "${DEPENDENCY_IMAGE}" >/dev/null 2>&1; then
-    echo "ERROR: Dependency image does not exist: ${DEPENDENCY_IMAGE}"
-    echo "Available dependency images:"
-    "${DOCKER[@]}" images --format '{{.Repository}}:{{.Tag}}' | grep '^wirecell-spng-deps:' || true
+if ! podman-hpc image inspect "${DEPENDENCY_IMAGE}" >/dev/null 2>&1; then
+    echo "ERROR: Dependency image does not exist:"
+    echo "  ${DEPENDENCY_IMAGE}"
+    echo
+    echo "Available Wire-Cell dependency images:"
+    podman-hpc images \
+        --format '{{.Repository}}:{{.Tag}}' |
+        grep '^wirecell-spng-deps:' || true
     exit 1
 fi
 
 BUILD_ARGS=(
-    --network="${DOCKER_BUILD_NETWORK}"
+    --network="${PODMAN_BUILD_NETWORK}"
     --file Dockerfile
-    --progress=plain
     --build-arg "DEPENDENCY_IMAGE=${DEPENDENCY_IMAGE}"
     --build-arg "WCT_REPOSITORY=${WCT_REPOSITORY}"
     --build-arg "WCT_REF=${WCT_REF}"
@@ -59,16 +60,18 @@ if [[ "${NO_CACHE}" == "true" ]]; then
     BUILD_ARGS+=(--no-cache)
 fi
 
-echo "Building final Wire-Cell SPNG image"
+echo "Building final Perlmutter Wire-Cell SPNG image"
 echo "  Dependency image: ${DEPENDENCY_IMAGE}"
 echo "  Output image:     ${IMAGE_NAME}:${IMAGE_TAG}"
 echo "  WCT repository:   ${WCT_REPOSITORY}"
 echo "  WCT ref:          ${WCT_REF}"
 echo "  Build jobs:       ${BUILD_JOBS}"
-echo "  Build network:    ${DOCKER_BUILD_NETWORK}"
+echo "  Build network:    ${PODMAN_BUILD_NETWORK}"
 echo "  No cache:         ${NO_CACHE}"
+echo
 
-"${DOCKER[@]}" build "${BUILD_ARGS[@]}" .
+podman-hpc build "${BUILD_ARGS[@]}" .
 
 echo
-echo "Wire-Cell image built: ${IMAGE_NAME}:${IMAGE_TAG}"
+echo "Wire-Cell image built:"
+echo "  ${IMAGE_NAME}:${IMAGE_TAG}"
