@@ -17,6 +17,7 @@ The build does not use a host-side Spack installation or packages installed by a
 ├── .gitignore
 ├── Dockerfile # Dockerfile that builds wire-cell-toolkit based upon the image created from Dockerfile.dependencies
 ├── Dockerfile.dependencies #Base image that builds dependencies needed for wire-cell-toolkit
+├── DEPENDENCY_IMAGE_OVERVIEW.md # OS, CUDA, PyTorch, Spack, and navigation guide for the dependency image
 ├── README.md # This file
 ├── STATUS.md # Few initial errors when building image were recorded here but not maintained. 
 ├── bootstrap.sh # One shot script to build wire-cell-toolkit (Two step build process)
@@ -29,6 +30,10 @@ The build does not use a host-side Spack installation or packages installed by a
 └── wirecell-package/ # Obsolete. We do not use spack based wire-cell-toolkit build.
     └── package.py        # optional
 ```
+
+For a detailed description of the intermediate image produced by
+`build-dependencies.sh`, including installed versions, important paths, and
+inspection commands, see [DEPENDENCY_IMAGE_OVERVIEW.md](DEPENDENCY_IMAGE_OVERVIEW.md).
 
 ## Build with default settings
 Make the bootstrap script executable:
@@ -205,4 +210,3 @@ You can download the existing wire-cell container from the dockerhub:
 docker pull abashyal/wirecell-spng:cuda89
 ```
 Find more info at [dockerhub](https://hub.docker.com/r/abashyal/wirecell-spng).
-
