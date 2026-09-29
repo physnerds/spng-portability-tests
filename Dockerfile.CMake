@@ -52,9 +52,24 @@ RUN --mount=type=cache,target=/opt/spack-cache \
 
 # Clone the NVTX-enabled SPNG branch.  WCT_REF remains a build argument so a
 # different branch or tag can be selected without editing the file.
+COPY patches/wct-nvtx3-header-only.patch /tmp/wct-nvtx3-header-only.patch
 RUN set -euo pipefail; \
     git clone --branch "${WCT_REF}" --single-branch \
         "${WCT_REPOSITORY}" "${WCT_SOURCE}"; \
+    git -C "${WCT_SOURCE}" apply --check /tmp/wct-nvtx3-header-only.patch; \
+    git -C "${WCT_SOURCE}" apply /tmp/wct-nvtx3-header-only.patch; \
+    git -C "${WCT_SOURCE}" apply --reverse --check /tmp/wct-nvtx3-header-only.patch; \
+    git -C "${WCT_SOURCE}" diff --check; \
+    grep -Fq \
+        'PATH_SUFFIXES include/nvtx3 targets/x86_64-linux/include/nvtx3 include)' \
+        "${WCT_SOURCE}/cmake/WCTDependencies.cmake"; \
+    if grep -Fq 'find_library(WCT_NVTX_LIBRARY' \
+        "${WCT_SOURCE}/cmake/WCTDependencies.cmake"; then \
+        echo "ERROR: legacy NVTX library detection remains after patching" >&2; \
+        exit 1; \
+    fi; \
+    echo "Applied NVTX3 header-only CMake patch:"; \
+    git -C "${WCT_SOURCE}" diff --stat; \
     git -C "${WCT_SOURCE}" rev-parse HEAD; \
     grep -RIlE 'NVTX|nvtx|nvToolsExt' \
         "${WCT_SOURCE}/CMakeLists.txt" \
@@ -95,8 +110,19 @@ RUN --mount=type=cache,target=/opt/spack-cache \
     test -d "${TORCH_SITE}/include"; \
     test -d "${TORCH_SITE}/share/cmake/Torch"; \
     case "${with_nvtx}" in \
-        true) NVTX_CMAKE_ARGS=(-DCT_WITH_NVTX=ON) ;; \
-        false) NVTX_CMAKE_ARGS=() ;; \
+        true) \
+            NVTX_PREFIX="$(spack -e "${WCT_ENV}" location -i nvtx)"; \
+            NVTX_INCLUDE_DIR="${NVTX_PREFIX}/include/nvtx3"; \
+            test -f "${NVTX_INCLUDE_DIR}/nvToolsExt.h"; \
+            NVTX_CMAKE_ARGS=( \
+                -DWCT_WITH_NVTX=ON \
+                "-DWCT_NVTX_INCLUDE_DIR=${NVTX_INCLUDE_DIR}" \
+            ) \
+            ;; \
+        false) \
+            NVTX_INCLUDE_DIR="disabled"; \
+            NVTX_CMAKE_ARGS=() \
+            ;; \
         *) echo "ERROR: with_nvtx must be true or false" >&2; exit 2 ;; \
     esac; \
     BUILD_LIBRARY_PATH="${TORCH_SITE}/lib:${CUDA_TARGET}/lib:${CUDA_TARGET}/lib64:${CUDA_PREFIX}/lib64:${SPACK_VIEW}/lib:${SPACK_VIEW}/lib64"; \
@@ -106,6 +132,7 @@ RUN --mount=type=cache,target=/opt/spack-cache \
     echo "  fmt:    ${FMT_PREFIX} (${FMT_CMAKE_DIR})"; \
     echo "  spdlog: ${SPDLOG_PREFIX} (${SPDLOG_CMAKE_DIR})"; \
     echo "  Torch:  ${TORCH_SITE}"; \
+    echo "  NVTX:   ${NVTX_INCLUDE_DIR}"; \
     "${CMAKE_BIN}" --version; \
     rm -rf "${WCT_BUILD}"; \
     LD_LIBRARY_PATH="${BUILD_LIBRARY_PATH}" \
