@@ -10,7 +10,8 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ARG WCT_REPOSITORY=https://github.com/WireCell/wire-cell-toolkit.git
 ARG WCT_REF=spng-default-nvtx
-ARG BUILD_JOBS=16
+ARG BUILD_JOBS=8
+ARG with_nvtx=true
 
 ENV SPACK_ROOT=/opt/spack
 ENV SPACK_DISABLE_LOCAL_CONFIG=true
@@ -93,6 +94,11 @@ RUN --mount=type=cache,target=/opt/spack-cache \
     test -n "${SPDLOG_CONFIG}"; \
     test -d "${TORCH_SITE}/include"; \
     test -d "${TORCH_SITE}/share/cmake/Torch"; \
+    case "${with_nvtx}" in \
+        true) NVTX_CMAKE_ARGS=(-DCT_WITH_NVTX=ON) ;; \
+        false) NVTX_CMAKE_ARGS=() ;; \
+        *) echo "ERROR: with_nvtx must be true or false" >&2; exit 2 ;; \
+    esac; \
     BUILD_LIBRARY_PATH="${TORCH_SITE}/lib:${CUDA_TARGET}/lib:${CUDA_TARGET}/lib64:${CUDA_PREFIX}/lib64:${SPACK_VIEW}/lib:${SPACK_VIEW}/lib64"; \
     BUILD_PKG_CONFIG_PATH="${SPACK_VIEW}/lib/pkgconfig:${SPACK_VIEW}/lib64/pkgconfig:${SPACK_VIEW}/share/pkgconfig"; \
     echo "Resolved CMake build tools and dependencies:"; \
@@ -105,6 +111,7 @@ RUN --mount=type=cache,target=/opt/spack-cache \
     LD_LIBRARY_PATH="${BUILD_LIBRARY_PATH}" \
     PKG_CONFIG_PATH="${BUILD_PKG_CONFIG_PATH}" \
     "${CMAKE_BIN}" -S "${WCT_SOURCE}" -B "${WCT_BUILD}" \
+        "${NVTX_CMAKE_ARGS[@]}" \
         -DWCT_WITH_SPNG=ON \
         -DWITH_LIBTORCH="${TORCH_SITE}" \
         -DWITH_SPDLOG="${SPDLOG_PREFIX}" \
