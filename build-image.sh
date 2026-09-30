@@ -5,15 +5,15 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${PROJECT_DIR}"
 
-DEPENDENCY_IMAGE="${DEPENDENCY_IMAGE:-wirecell-spng-deps:perlmutter}"
+DEPENDENCY_IMAGE="${DEPENDENCY_IMAGE:-docker.io/abashyal/wirecell-spng-deps:cuda80}"
 
 IMAGE_NAME="${IMAGE_NAME:-wirecell-spng}"
-IMAGE_TAG="${IMAGE_TAG:-perlmutter}"
+IMAGE_TAG="${IMAGE_TAG:-cuda80}"
 
 WCT_REPOSITORY="${WCT_REPOSITORY:-https://github.com/WireCell/wire-cell-toolkit.git}"
 WCT_REF="${WCT_REF:-spng}"
 
-BUILD_JOBS="${BUILD_JOBS:-16}"
+BUILD_JOBS="${BUILD_JOBS:-4}"
 PODMAN_BUILD_NETWORK="${PODMAN_BUILD_NETWORK:-host}"
 NO_CACHE="${NO_CACHE:-false}"
 
@@ -36,14 +36,21 @@ if ! command -v podman-hpc >/dev/null 2>&1; then
 fi
 
 if ! podman-hpc image inspect "${DEPENDENCY_IMAGE}" >/dev/null 2>&1; then
-    echo "ERROR: Dependency image does not exist:"
+    echo "Dependency image not found locally:"
     echo "  ${DEPENDENCY_IMAGE}"
     echo
-    echo "Available Wire-Cell dependency images:"
-    podman-hpc images \
-        --format '{{.Repository}}:{{.Tag}}' |
-        grep '^wirecell-spng-deps:' || true
-    exit 1
+    echo "Attempting to pull dependency image..."
+
+    if ! podman-hpc pull "${DEPENDENCY_IMAGE}"; then
+        echo
+        echo "ERROR: Dependency image was not found locally and could not be pulled:"
+        echo "  ${DEPENDENCY_IMAGE}"
+        exit 1
+    fi
+
+    echo
+    echo "Successfully pulled:"
+    echo "  ${DEPENDENCY_IMAGE}"
 fi
 
 BUILD_ARGS=(
