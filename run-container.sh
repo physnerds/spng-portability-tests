@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-IMAGE="${IMAGE:-wirecell-spng:perlmutter}"
+IMAGE="${IMAGE:-abashyal/wirecell-spng:cuda80}"
 WORK_DIR="${WORK_DIR:-${PWD}/work}"
 
 mkdir -p "${WORK_DIR}"
@@ -12,11 +12,6 @@ if ! command -v podman-hpc >/dev/null 2>&1; then
     exit 1
 fi
 
-if ! podman-hpc image inspect "${IMAGE}" >/dev/null 2>&1; then
-    echo "ERROR: Image does not exist:"
-    echo "  ${IMAGE}"
-    exit 1
-fi
 
 echo "Starting Perlmutter Wire-Cell SPNG container"
 echo "  Image:     ${IMAGE}"
@@ -27,6 +22,12 @@ podman-hpc run \
     --rm \
     --interactive \
     --tty \
+    --gpus=all \
+    --volume "${WORK_DIR}:/work" \
+    --mount type=bind,source=/global/homes/a/abashyal/spng-portability-tests/wire-cell-data,target=/opt/wire-cell-toolkit/wire-cell-data,readonly \
+    --mount type=bind,source=/global/homes/a/abashyal/spng-portability-tests/infiles,target=/opt/wire-cell-toolkit/infiles \
+    --mount type=bind,source=/global/homes/a/abashyal/spng-portability-tests/outfiles,target=/opt/wire-cell-toolkit/outfiles \
+    --ulimit stack=67108864 \
     --volume "${WORK_DIR}:/work" \
     --workdir /work \
     "${IMAGE}" \
