@@ -1,0 +1,9 @@
+# Ignore all hidden files and directories
+.*
+
+# Un-ignore the .gitignore file itself so it can be tracked
+!/.gitignore
+
+# Git treats symlinks as normal text files containing the path; 
+# To ignore them, you must list their specific paths or use an automated script.
+
