@@ -8,3 +8,7 @@
 # To ignore them, you must list their specific paths or use an automated script.
 
 ./local-build/knowledge-base
+./local-build/spack-cache
+./local-build/spack-install
+./local-build/spack-stage
+
