@@ -1,0 +1,91 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 04e7ee0e..9224a0ca 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -56,6 +56,8 @@ set_property(CACHE WCT_SPDLOG_ACTIVE_LEVEL PROPERTY STRINGS
+              trace debug info warn error critical off)
+ 
+ # Tests are off by default (mirrors waf's --tests opt-in); wired up in wct-ike.9.
++option(WCT_WITH_NVTX "Enable NVTX3 profiling annotations" OFF)
++
+ option(WCT_WITH_TESTS "Build and register the test suite (mirrors --tests)" OFF)
+ 
+ # The experimental WireCellSpng package only builds against a recent libtorch
+diff --git a/cmake/WCTBuildConfig.cmake b/cmake/WCTBuildConfig.cmake
+index fd1e009f..db985070 100644
+--- a/cmake/WCTBuildConfig.cmake
++++ b/cmake/WCTBuildConfig.cmake
+@@ -50,7 +50,8 @@ set(_wct_have_map
+     "PYTHON:HAVE,LIB,INC"
+     "ROOTSYS:HAVE"
+     "LIBTORCH:HAVE"
+-    "CUDA:HAVE")
++    "CUDA:HAVE"
++    "NVTX:HAVE")
+ 
+ set(_lines "")
+ foreach(_entry IN LISTS _wct_have_map)
+diff --git a/cmake/WCTDependencies.cmake b/cmake/WCTDependencies.cmake
+index 6a367caf..00b43071 100644
+--- a/cmake/WCTDependencies.cmake
++++ b/cmake/WCTDependencies.cmake
+@@ -181,6 +181,18 @@ function(_wct_missing tok)
+   set(WCT_EXTERNAL_MISSING "${WCT_EXTERNAL_MISSING}" CACHE INTERNAL "")
+ endfunction()
+ 
++# NVTX3 is header-only and is supplied by the CUDA toolkit.
++if(WCT_WITH_NVTX)
++  find_path(WCT_NVTX_INCLUDE_DIR NAMES nvToolsExt.h
++    HINTS "${CUDAToolkit_ROOT}/include/nvtx3" "$ENV{CUDA_HOME}/include/nvtx3"
++    PATH_SUFFIXES nvtx3 include/nvtx3)
++  if(NOT WCT_NVTX_INCLUDE_DIR)
++    message(FATAL_ERROR "WCT_WITH_NVTX requires NVTX3 headers (set WCT_NVTX_INCLUDE_DIR)")
++  endif()
++  _wct_provide(NVTX INCLUDE "${WCT_NVTX_INCLUDE_DIR}" LINK "${CMAKE_DL_LIBS}")
++  set_property(TARGET WCT::NVTX PROPERTY INTERFACE_COMPILE_DEFINITIONS HAVE_NVTX=1)
++endif()
++
+ # ===========================================================================
+ # Mandatory dependencies
+ # ===========================================================================
+diff --git a/cmake/WCTExport.cmake b/cmake/WCTExport.cmake
+index c049a06e..5e330f61 100644
+--- a/cmake/WCTExport.cmake
++++ b/cmake/WCTExport.cmake
+@@ -157,6 +157,9 @@ function(wct_install_exports)
+     string(APPEND _block "    INTERFACE_LINK_LIBRARIES \"${_lnk}\"\n")
+     string(APPEND _block "    INTERFACE_INCLUDE_DIRECTORIES \"${_inc}\")\n")
+     string(APPEND _block "endif()\n")
++    if(_tok STREQUAL "NVTX")
++      string(APPEND _block "set_property(TARGET WCT::NVTX PROPERTY INTERFACE_COMPILE_DEFINITIONS HAVE_NVTX=1)\n")
++    endif()
+   endforeach()
+   if(_needpc)
+     set(_block "find_package(PkgConfig REQUIRED)\n${_block}")
+diff --git a/pgraph/CMakeLists.txt b/pgraph/CMakeLists.txt
+index f27f5b5a..d6daf579 100644
+--- a/pgraph/CMakeLists.txt
++++ b/pgraph/CMakeLists.txt
+@@ -1 +1,5 @@
+-wct_package(WireCellPgraph USE WireCellAux)
++set(_pgraph_deps WireCellAux)
++if(WCT_WITH_NVTX)
++  list(APPEND _pgraph_deps NVTX)
++endif()
++wct_package(WireCellPgraph USE ${_pgraph_deps})
+diff --git a/spng/CMakeLists.txt b/spng/CMakeLists.txt
+index f0afc6fa..42574cca 100644
+--- a/spng/CMakeLists.txt
++++ b/spng/CMakeLists.txt
+@@ -1,6 +1,10 @@
+ # WireCellSpng - libtorch-based signal processing (mirrors spng/wscript_build:
+ # use='WireCellAux SPDLOG LIBTORCH').  Gated on LIBTORCH by the top-level file.
+-wct_package(WireCellSpng USE WireCellAux SPDLOG LIBTORCH)
++set(_spng_deps WireCellAux SPDLOG LIBTORCH)
++if(WCT_WITH_NVTX)
++  list(APPEND _spng_deps NVTX)
++endif()
++wct_package(WireCellSpng USE ${_spng_deps})
+ 
+ # The check_threads exploratory program (spng-fra.13) needs TBB to reproduce the
+ # "torch op on a TBB worker thread" scenario.  Link it in when available; the
