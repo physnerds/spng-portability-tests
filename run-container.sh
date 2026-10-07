@@ -12,7 +12,6 @@ if ! command -v podman-hpc >/dev/null 2>&1; then
     exit 1
 fi
 
-
 echo "Starting Perlmutter Wire-Cell SPNG container"
 echo "  Image:     ${IMAGE}"
 echo "  Work dir:  ${WORK_DIR}"
@@ -23,12 +22,11 @@ podman-hpc run \
     --interactive \
     --tty \
     --gpus=all \
+    --entrypoint /bin/bash \
     --volume "${WORK_DIR}:/work" \
     --mount type=bind,source=/global/homes/a/abashyal/spng-portability-tests/wire-cell-data,target=/opt/wire-cell-toolkit/wire-cell-data,readonly \
     --mount type=bind,source=/global/homes/a/abashyal/spng-portability-tests/infiles,target=/opt/wire-cell-toolkit/infiles \
     --mount type=bind,source=/global/homes/a/abashyal/spng-portability-tests/outfiles,target=/opt/wire-cell-toolkit/outfiles \
     --ulimit stack=67108864 \
-    --volume "${WORK_DIR}:/work" \
     --workdir /work \
-    "${IMAGE}" \
-    bash
+    "${IMAGE}"
