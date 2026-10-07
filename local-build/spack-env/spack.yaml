@@ -1,0 +1,108 @@
+spack:
+  repos:
+    wirecell: /global/u2/a/abashyal/spng-portability-tests/local-build/wire-cell-spack/spack_repo/wirecell
+
+  specs:
+    # Dependencies from Dockerfile.dependencies, adapted to Spack 1.0.4.
+    #
+    # PyTorch is intentionally NOT installed by Spack.
+    # CUDA and PyTorch are supplied by NERSC modules.
+
+    - boost@1.88.0 +atomic +chrono +date_time +exception +filesystem +graph +iostreams +math +program_options +random +regex +serialization +shared +system +thread +multithreaded cxxstd=17 %gcc@13.2.1
+
+    - eigen@3.4.0 ~ipo ~nightly ~rocm %gcc@13.2.1
+
+    - fftw@3.3.10 ~mpi ~openmp ~pfft_patches +shared precision=double,float %gcc@13.2.1
+
+    - fmt@8.1.1 ~ipo +pic +shared cxxstd=11 %gcc@13.2.1
+
+    - go-jsonnet@0.22.0 +python +shared %gcc@13.2.1
+
+    - intel-tbb@2022.0.0 ~ipo +shared +tm %gcc@13.2.1
+
+    - jsoncpp@1.9.6 ~ipo %gcc@13.2.1
+
+    - pkgconf@2.3.0 %gcc@13.2.1
+
+    - spdlog@1.10.0 ~ipo +shared %gcc@13.2.1
+
+    - bzip2
+
+    - wire-cell-data@0.2.0
+
+    - zlib-ng@2.2.4 +compat +new_strategies +opt +pic +shared %gcc@13.2.1
+
+  view: /global/u2/a/abashyal/spng-portability-tests/local-build/deps-view
+
+  concretizer:
+    unify: true
+    reuse: false
+
+  packages:
+    python:
+      externals:
+      - spec: python@3.12.11
+        prefix: /global/common/software/nersc9/pytorch/2.8.0
+      buildable: false
+    py-setuptools:
+      externals:
+      - spec: py-setuptools@80.9.0
+        prefix: /global/common/software/nersc9/pytorch/2.8.0
+      buildable: false
+    py-pip:
+      externals:
+      - spec: py-pip@25.2
+        prefix: /global/common/software/nersc9/pytorch/2.8.0
+      buildable: false
+    py-wheel:
+      externals:
+      - spec: py-wheel@0.45.1
+        prefix: /global/common/software/nersc9/pytorch/2.8.0
+      buildable: false
+    git:
+      externals:
+      - spec: git@2.51.0
+        prefix: /usr
+      buildable: false
+    gmake:
+      externals:
+      - spec: gmake@4.2.1
+        prefix: /usr
+      buildable: false
+    cmake:
+      externals:
+      - spec: cmake@3.30.2
+        prefix: /global/common/software/nersc9/cmake/3.30.2
+      buildable: false
+    all:
+      target: [x86_64]
+
+    gcc:
+      externals:
+        - spec: gcc@13.2.1 languages='c,c++,fortran'
+          prefix: /opt/cray/pe/gcc-native/13
+          extra_attributes:
+            compilers:
+              c: /opt/cray/pe/gcc-native/13/bin/gcc
+              cxx: /opt/cray/pe/gcc-native/13/bin/g++
+              fortran: /opt/cray/pe/gcc-native/13/bin/gfortran
+      buildable: false
+
+    cuda:
+      externals:
+        - spec: cuda@12.9
+          prefix: /opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9
+      buildable: false
+
+  bootstrap:
+    root: /global/u2/a/abashyal/spng-portability-tests/local-build/spack-bootstrap
+
+  config:
+    build_jobs: 4
+    install_tree:
+      root: /global/u2/a/abashyal/spng-portability-tests/local-build/spack-install
+    source_cache: /global/u2/a/abashyal/spng-portability-tests/local-build/spack-cache/source
+    misc_cache: /global/u2/a/abashyal/spng-portability-tests/local-build/spack-cache/misc
+    test_stage: /global/u2/a/abashyal/spng-portability-tests/local-build/spack-cache/test
+    build_stage:
+      - /global/u2/a/abashyal/spng-portability-tests/local-build/spack-stage
