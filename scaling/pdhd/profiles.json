@@ -1,0 +1,19 @@
+{
+  "perlmutter": {
+    "gpus_per_node": 4,
+    "physical_cores_per_node": 64,
+    "slurm_cpus_per_core": 2,
+    "runtime": "podman-hpc",
+    "network": "slirp4netns",
+    "constraint": "gpu",
+    "container_python": "/usr/bin/python3"
+  },
+  "generic": {
+    "gpus_per_node": 4,
+    "physical_cores_per_node": 64,
+    "slurm_cpus_per_core": 1,
+    "runtime": "docker",
+    "network": null,
+    "constraint": null
+  }
+}
