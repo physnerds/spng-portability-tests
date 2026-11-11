@@ -15,6 +15,8 @@ NVTX, and adding it would create a different performance experiment.
 
 | File | Purpose |
 | --- | --- |
+| `scaling/pdhd/pdhd-condor-generate.sh` | Optional CPU-only event-generation and dataset-preparation executable |
+| `scaling/pdhd/pdhd-generate.sub` | Resource-matched optional generation job |
 | `scaling/pdhd/pdhd-condor.sh` | Common HTCondor executable |
 | `scaling/pdhd/pdhd-functional.sub` | Short one-GPU functional test |
 | `scaling/pdhd/pdhd-scaling.sub` | Default one-GPU process-packing study |
@@ -47,7 +49,8 @@ the submit host.
 The image must be an existing SIF file. Do not use a `docker://` URI or pull
 the image during a measured job.
 
-The dataset must contain:
+`DATASET` is either an existing dataset directory or the fresh target path for
+the optional generation job. If it already exists, it must contain:
 
 ```text
 dataset.json
@@ -56,6 +59,19 @@ adc-tpc1.npz
 adc-tpc2.npz
 adc-tpc3.npz
 ```
+
+If `DATASET` is absent, also select an input deposit archive:
+
+```bash
+export DEPOS=/shared/path/to/deposits.npz
+test -r "$DEPOS"
+```
+
+The generation job selects `SOURCE_EVENTS` deposit IDs, simulates four matched
+APA ADC archives, validates them, and creates a `DATASET_EVENTS`-event scaling
+dataset. Its defaults are one source event and 32 output events with explicit
+repetition. Repetition is recorded in `dataset.json`; it creates controlled
+load, not independent physics events.
 
 The project must contain:
 
@@ -72,11 +88,16 @@ command -v condor_submit
 command -v condor_q
 test -x "$PROJECT_DIR/scaling/pdhd/pdhd-condor.sh"
 test -r "$IMAGE"
-test -r "$DATASET/dataset.json"
-for apa in 0 1 2 3; do test -r "$DATASET/adc-tpc${apa}.npz"; done
 test -r "$PROJECT_DIR/infiles/legacy_roiuniter_090326.ts"
 test -d "$PROJECT_DIR/wire-cell-data"
 mkdir -p "$PROJECT_DIR/condor-logs" "$RESULTS_DIR"
+
+if test -r "$DATASET/dataset.json"; then
+  for apa in 0 1 2 3; do test -r "$DATASET/adc-tpc${apa}.npz"; done
+else
+  test ! -e "$DATASET"
+  test -r "$DEPOS"
+fi
 ```
 
 The execute node must provide `python3`, `apptainer`, `nvidia-smi`, and
@@ -118,6 +139,7 @@ The submit requests are intentionally limited to the maximum active workload:
 
 | Job | GPUs | CPUs | Memory | Execute disk | Reason |
 | --- | ---: | ---: | ---: | ---: | --- |
+| Event generation | 0 | 1 | 8 GB | 2 GB | Serial CPU `Pgrapher`; outputs go directly to shared storage |
 | Functional | 1 | 4 | 12 GB | 2 GB | P=4 with one core/process; reference peak RSS was about 7.4 GiB total |
 | One-GPU scaling | 1 | 16 | 16 GB | 2 GB | P=4 with four cores/process; reference peak process-RSS sum was below 10 GiB |
 | Optional four-GPU scaling | 4 | 16 | 16 GB | 2 GB | Same four host processes/16 cores; only GPU placement changes |
@@ -134,7 +156,7 @@ because the pool assigns SMT siblings, report `preflight.json` and the Condor
 slot configuration; do not increase CPU requests before confirming the
 mapping.
 
-The two studies answer different questions:
+The two scaling studies answer different questions:
 
 - `pdhd-scaling.sub`: P=1,2,4 Wire-Cell processes share one GPU. This is a
   process-packing/concurrency study. Multi-GPU efficiency is reported as N/A.
@@ -143,7 +165,81 @@ The two studies answer different questions:
 
 Do not represent the one-GPU packing results as multi-GPU scaling.
 
-## 4. Run the functional test first
+## 4. Generate or reuse the event dataset
+
+This is the first workflow stage. Skip its submission only when all five
+dataset files already exist. The scaling planner still validates the existing
+manifest, structure, and hashes before measured work.
+
+Check for a reusable dataset:
+
+```bash
+dataset_ready=1
+for path in "$DATASET/dataset.json" \
+            "$DATASET/adc-tpc0.npz" "$DATASET/adc-tpc1.npz" \
+            "$DATASET/adc-tpc2.npz" "$DATASET/adc-tpc3.npz"; do
+  test -r "$path" || dataset_ready=0
+done
+printf 'dataset_ready=%s\n' "$dataset_ready"
+```
+
+If this prints `dataset_ready=1`, proceed to section 5. If it prints zero,
+`DATASET` must not exist, and `DEPOS` must point to a readable NPZ archive.
+Inspect the generation job without submitting it:
+
+```bash
+test ! -e "$DATASET"
+test -r "$DEPOS"
+condor_submit -dry-run - scaling/pdhd/pdhd-generate.sub | sed -n '1,160p'
+```
+
+The default creates 32 output events from one selected source event, explicitly
+allowing repeated copies. To require 32 available source deposits with no
+repetition, override the submit variables:
+
+```bash
+condor_submit source_events=32 dataset_events=32 repeat_input=0 \
+  scaling/pdhd/pdhd-generate.sub
+```
+
+For the default controlled-load dataset, submit:
+
+```bash
+condor_submit scaling/pdhd/pdhd-generate.sub
+```
+
+Record and monitor the generation cluster ID. Its result directory and logs
+are:
+
+```bash
+export GENERATION_CLUSTER_ID=REPLACE_WITH_CLUSTER_ID
+export GENERATION_DIR="$RESULTS_DIR/pdhd-generation-${GENERATION_CLUSTER_ID}.0"
+condor_q "$GENERATION_CLUSTER_ID" -better-analyze
+tail -f "$PROJECT_DIR/condor-logs/pdhd-generation-${GENERATION_CLUSTER_ID}.0.out"
+```
+
+Do not submit scaling until generation exits zero and prints
+`PASS: generated 32-event dataset`. Inspect:
+
+```bash
+condor_history "$GENERATION_CLUSTER_ID" -limit 1 \
+  -af ClusterId ProcId JobStatus ExitCode HoldReason RemoteHost RemoteWallClockTime
+cat "$GENERATION_DIR/preflight.json"
+cat "$GENERATION_DIR/validation.json"
+cat "$DATASET/dataset.json"
+for apa in 0 1 2 3; do test -r "$DATASET/adc-tpc${apa}.npz"; done
+```
+
+The generation job requests no GPU. PDHD event simulation uses the serial CPU
+`Pgrapher` path with `device=cpu`; reserving an L40S would be unnecessary. It
+requests one CPU, 8 GB RAM, and 2 GB execute disk. Generated archives and the
+final dataset are written to shared storage.
+
+If generation fails after creating a partial `DATASET`, preserve the logs and
+move the partial directory aside before retrying with a fresh target. The
+script refuses to overwrite any existing incomplete dataset.
+
+## 5. Run the functional test
 
 The functional test requests one GPU, four CPUs, 12 GB RAM, and 2 GB execute
 disk. It runs P=1 and P=4 with one core/process, no warmup, and one measured
@@ -211,15 +307,15 @@ find "$RUN_DIR/campaign/rounds" -name summary.json -print
 
 Do not submit the measured campaign until this test succeeds.
 
-## 5. Run the default one-GPU packing campaign
+## 6. Run the default one-GPU packing campaign
 
 Use the prepared 32-event dataset for useful measurements. The default job
 requests one GPU, 16 CPUs, 16 GB RAM, and 2 GB execute disk. It runs the
 Cartesian product P=1,2,4 and TBB=1,2,4 with four assigned physical
 cores/process, one warmup, and five measured rounds/case.
 
-Set `DATASET` to the 32-event directory, repeat the input checks from section
-2, and submit:
+Use the 32-event directory produced or verified in section 4, repeat the input
+checks from section 2, and submit:
 
 ```bash
 cd "$PROJECT_DIR"
@@ -227,7 +323,7 @@ condor_submit -dry-run - scaling/pdhd/pdhd-scaling.sub | sed -n '1,160p'
 condor_submit scaling/pdhd/pdhd-scaling.sub
 ```
 
-Monitor it with the commands from section 4, substituting the new cluster ID
+Monitor it with the commands from section 5, substituting the new cluster ID
 and `pdhd-scaling` log prefix. Its result directory is:
 
 ```bash
@@ -246,7 +342,7 @@ column -s, -t < "$RUN_DIR/case-metrics.csv" | less -S
 All 45 measured rounds must be present: nine cases times five repeats.
 Warmups are additional rounds and are excluded from the tables.
 
-## 6. Optional four-GPU campaign
+## 7. Optional four-GPU campaign
 
 Only use this test after `condor_status` confirms that `sgpu` can provide four
 GPUs in one slot. Otherwise the job may remain idle indefinitely.
@@ -270,10 +366,11 @@ Condor cluster IDs keep the directories separate.
 The four-GPU report includes process speedup and multi-GPU scaling efficiency
 relative to P=1 at the same TBB setting.
 
-## 7. What the test records
+## 8. What the test records
 
 | Output | Contents |
 | --- | --- |
+| Generation `request.txt`, `generation.log`, `validation.json`, `dataset.log` | Deposit selection, CPU simulation, structural ADC validation, and dataset creation |
 | `preflight.json` | Host, Condor environment, CPU affinity, original GPU allocation token, resolved full UUID, and initial GPU readings |
 | `nvidia-smi-L.txt` | GPUs visible on the execute host |
 | `image.sha256` | SIF checksum |
@@ -292,7 +389,7 @@ is device activity, not achieved FLOPS or kernel occupancy. Power and memory
 are device-wide readings. For one-GPU packing, overlapping process windows
 observe the same shared device and are not process-exclusive GPU measurements.
 
-## 8. Holds, failures, cancellation, and reruns
+## 9. Holds, failures, cancellation, and reruns
 
 Useful Condor `JobStatus` values are 1 idle, 2 running, 5 held, and 6
 transferring output. For a held job:
@@ -318,18 +415,22 @@ Every submission uses a fresh directory derived from its Condor cluster and
 process IDs. Do not rerun manually into an existing `RUN_DIR`; campaigns are
 immutable and incomplete round directories are not resumable.
 
-## 9. Results to report back
+## 10. Results to report back
 
 For each attempted job, report:
 
 1. the submit file used and Condor cluster ID;
-2. the output of the `condor_history` command from section 4;
+2. the output of the relevant `condor_history` command;
 3. the Condor `.out` and `.err` files;
 4. `preflight.json` and `nvidia-smi-L.txt`;
 5. `plan.log` and `run.log`, or at least their last 100 lines;
 6. `telemetry-summary.md`, `telemetry-coverage.json`, and
    `case-metrics.csv` when produced; and
 7. every `failed.json` if the job did not pass.
+
+When generation ran, also report its cluster ID, `request.txt`,
+`generation.log`, `validation.json`, `dataset.log`, and the resulting
+`dataset.json`.
 
 Also state the dataset event count, `repeated_copies` value, SIF path, and
 whether the run was the one-GPU packing or four-GPU scaling study. Do not
