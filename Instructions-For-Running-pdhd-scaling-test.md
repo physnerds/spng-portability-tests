@@ -17,6 +17,7 @@ NVTX, and adding it would create a different performance experiment.
 | --- | --- |
 | `scaling/pdhd/pdhd-condor-generate.sh` | Optional CPU-only event-generation and dataset-preparation executable |
 | `scaling/pdhd/pdhd-generate.sub` | Resource-matched optional generation job |
+| `scaling/pdhd/generate_line_depos.py` | Driver for selected upstream `spng-ssss` `line_depo` DAG targets and deterministic deposit-event assembly |
 | `scaling/pdhd/pdhd-condor.sh` | Common HTCondor executable |
 | `scaling/pdhd/pdhd-functional.sub` | Short one-GPU functional test |
 | `scaling/pdhd/pdhd-scaling.sub` | Default one-GPU process-packing study |
@@ -60,18 +61,18 @@ adc-tpc2.npz
 adc-tpc3.npz
 ```
 
-If `DATASET` is absent, also select an input deposit archive:
+If `DATASET` is absent, the generation job first invokes concrete deposit
+targets in the existing upstream `spng/test/spng-ssss` Snakefile. Its
+`line_depo` rule runs `wcpy gen detlinegen` with detector `pdhd`, the upstream
+`+1*m` X offset, wire-plane angle coordinates, planes 0–2, and the upstream
+theta grid. The job then simulates four matched APA ADC archives, validates
+them, and creates a `DATASET_EVENTS`-event scaling dataset.
 
-```bash
-export DEPOS=/shared/path/to/deposits.npz
-test -r "$DEPOS"
-```
-
-The generation job selects `SOURCE_EVENTS` deposit IDs, simulates four matched
-APA ADC archives, validates them, and creates a `DATASET_EVENTS`-event scaling
-dataset. Its defaults are one source event and 32 output events with explicit
-repetition. Repetition is recorded in `dataset.json`; it creates controlled
-load, not independent physics events.
+Defaults are one generated line-deposit event and 32 output events with
+explicit repetition. Repetition is recorded in `dataset.json`; it creates
+controlled load, not independent physics events. Up to 42 distinct line
+configurations are available from the upstream three-plane × fourteen-angle
+grid.
 
 The project must contain:
 
@@ -96,7 +97,6 @@ if test -r "$DATASET/dataset.json"; then
   for apa in 0 1 2 3; do test -r "$DATASET/adc-tpc${apa}.npz"; done
 else
   test ! -e "$DATASET"
-  test -r "$DEPOS"
 fi
 ```
 
@@ -139,7 +139,7 @@ The submit requests are intentionally limited to the maximum active workload:
 
 | Job | GPUs | CPUs | Memory | Execute disk | Reason |
 | --- | ---: | ---: | ---: | ---: | --- |
-| Event generation | 0 | 1 | 8 GB | 2 GB | Serial CPU `Pgrapher`; outputs go directly to shared storage |
+| Deposit + ADC generation | 0 | 1 | 8 GB | 2 GB | `wcpy detlinegen` followed by serial CPU `Pgrapher`; shared-storage output |
 | Functional | 1 | 4 | 12 GB | 2 GB | P=4 with one core/process; reference peak RSS was about 7.4 GiB total |
 | One-GPU scaling | 1 | 16 | 16 GB | 2 GB | P=4 with four cores/process; reference peak process-RSS sum was below 10 GiB |
 | Optional four-GPU scaling | 4 | 16 | 16 GB | 2 GB | Same four host processes/16 cores; only GPU placement changes |
@@ -184,18 +184,17 @@ printf 'dataset_ready=%s\n' "$dataset_ready"
 ```
 
 If this prints `dataset_ready=1`, proceed to section 5. If it prints zero,
-`DATASET` must not exist, and `DEPOS` must point to a readable NPZ archive.
-Inspect the generation job without submitting it:
+`DATASET` must not exist. Inspect the generation job without submitting it:
 
 ```bash
 test ! -e "$DATASET"
-test -r "$DEPOS"
 condor_submit -dry-run - scaling/pdhd/pdhd-generate.sub | sed -n '1,160p'
 ```
 
-The default creates 32 output events from one selected source event, explicitly
-allowing repeated copies. To require 32 available source deposits with no
-repetition, override the submit variables:
+The default runs `line_depo` once and creates 32 output events from that one
+generated deposit event, explicitly allowing repeated copies. To generate 32
+different line configurations and prohibit repetition, override the submit
+variables:
 
 ```bash
 condor_submit source_events=32 dataset_events=32 repeat_input=0 \
@@ -225,15 +224,28 @@ Do not submit scaling until generation exits zero and prints
 condor_history "$GENERATION_CLUSTER_ID" -limit 1 \
   -af ClusterId ProcId JobStatus ExitCode HoldReason RemoteHost RemoteWallClockTime
 cat "$GENERATION_DIR/preflight.json"
+cat "$GENERATION_DIR/depo-generation.json"
 cat "$GENERATION_DIR/validation.json"
 cat "$DATASET/dataset.json"
 for apa in 0 1 2 3; do test -r "$DATASET/adc-tpc${apa}.npz"; done
 ```
 
-The generation job requests no GPU. PDHD event simulation uses the serial CPU
-`Pgrapher` path with `device=cpu`; reserving an L40S would be unnecessary. It
-requests one CPU, 8 GB RAM, and 2 GB execute disk. Generated archives and the
-final dataset are written to shared storage.
+The generation job has three ordered stages:
+
+1. Snakemake runs the requested concrete targets through the existing upstream
+   `line_depo` rule. Individual one-event files are merged with event IDs
+   0…N−1.
+2. PDHD simulation uses serial CPU `Pgrapher` with `device=cpu` to create and
+   structurally validate four matched APA ADC archives.
+3. `pdhd.py generate` creates the immutable dataset manifest and requested
+   event count, with repetition only when explicitly enabled.
+
+It requests no GPU because all three stages are CPU-only. It requests one CPU,
+8 GB RAM, and 2 GB execute disk. Generated deposits, metadata, ADC archives,
+and the final dataset are written to shared storage. The SIF must contain
+`snakemake`, `wcpy`, `wire-cell`, the upstream Snakefile at
+`/opt/wire-cell-toolkit/spng/test/spng-ssss`, and `/usr/bin/python3` with
+NumPy.
 
 If generation fails after creating a partial `DATASET`, preserve the logs and
 move the partial directory aside before retrying with a fresh target. The
@@ -370,7 +382,8 @@ relative to P=1 at the same TBB setting.
 
 | Output | Contents |
 | --- | --- |
-| Generation `request.txt`, `generation.log`, `validation.json`, `dataset.log` | Deposit selection, CPU simulation, structural ADC validation, and dataset creation |
+| Generation `depo-generation.json`, `generated-depos.npz`, `line-depos/` | Snakefile command and targets, line geometry parameters, merged deposit archive, source metadata, and Snakemake log |
+| Generation `request.txt`, `generation.log`, `validation.json`, `dataset.log` | Deposit generation, CPU simulation, structural ADC validation, and dataset creation |
 | `preflight.json` | Host, Condor environment, CPU affinity, original GPU allocation token, resolved full UUID, and initial GPU readings |
 | `nvidia-smi-L.txt` | GPUs visible on the execute host |
 | `image.sha256` | SIF checksum |
@@ -429,8 +442,8 @@ For each attempted job, report:
 7. every `failed.json` if the job did not pass.
 
 When generation ran, also report its cluster ID, `request.txt`,
-`generation.log`, `validation.json`, `dataset.log`, and the resulting
-`dataset.json`.
+`depo-generation.json`, `generation.log`, `validation.json`, `dataset.log`,
+and the resulting `dataset.json`.
 
 Also state the dataset event count, `repeated_copies` value, SIF path, and
 whether the run was the one-GPU packing or four-GPU scaling study. Do not
@@ -441,5 +454,6 @@ claim physics equivalence from structural validation alone.
 - [Condor/SPNG requirements used for this handoff](SKILL-Condor.md)
 - [Reference Perlmutter telemetry report](2026-11-10_17-40-54_UTC-pdhd-61095945-telemetry-performance.md)
 - [Runner test scope and limitations](scaling/pdhd/TESTING.md)
+- [Upstream `spng-ssss` Snakefile and `line_depo` rule](https://github.com/WireCell/wire-cell-toolkit/blob/spng/spng/test/spng-ssss)
 - [HTCondor GPU jobs](https://htcondor.readthedocs.io/en/latest/users-manual/submitting-a-job.html#jobs-that-require-gpus)
 - [HTCondor GPU UUID discovery](https://htcondor.readthedocs.io/en/main/man-pages/condor_gpu_discovery.html)
