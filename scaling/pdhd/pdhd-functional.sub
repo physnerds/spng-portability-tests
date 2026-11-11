@@ -1,0 +1,26 @@
+# Short sgpu validation: P=1 and P=4 share one allocated GPU.
+# Export PROJECT_DIR, DATASET, IMAGE, and RESULTS_DIR before condor_submit.
+universe = vanilla
+
+project_dir = $ENV(PROJECT_DIR)
+dataset = $ENV(DATASET)
+image = $ENV(IMAGE)
+results_dir = $ENV(RESULTS_DIR)
+
+executable = $(project_dir)/scaling/pdhd/pdhd-condor.sh
+arguments = $(ClusterId).$(ProcId)
+
+request_gpus = 1
+request_cpus = 4
+request_memory = 12GB
+request_disk = 2GB
+should_transfer_files = NO
+
+initialdir = $(project_dir)
+log = condor-logs/pdhd-functional-$(ClusterId).log
+output = condor-logs/pdhd-functional-$(ClusterId).$(ProcId).out
+error = condor-logs/pdhd-functional-$(ClusterId).$(ProcId).err
+
+environment = "PROJECT_DIR=$(project_dir) DATASET=$(dataset) IMAGE=$(image) RESULTS_DIR=$(results_dir) MODE=functional GPUS=1 SAMPLE_MS=500"
+notification = Error
+queue 1

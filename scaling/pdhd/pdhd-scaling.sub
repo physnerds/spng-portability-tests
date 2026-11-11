@@ -1,0 +1,26 @@
+# Default sgpu study: P=1,2,4 processes pack onto one allocated GPU.
+# Export PROJECT_DIR, DATASET, IMAGE, and RESULTS_DIR before condor_submit.
+universe = vanilla
+
+project_dir = $ENV(PROJECT_DIR)
+dataset = $ENV(DATASET)
+image = $ENV(IMAGE)
+results_dir = $ENV(RESULTS_DIR)
+
+executable = $(project_dir)/scaling/pdhd/pdhd-condor.sh
+arguments = $(ClusterId).$(ProcId)
+
+request_gpus = 1
+request_cpus = 16
+request_memory = 16GB
+request_disk = 2GB
+should_transfer_files = NO
+
+initialdir = $(project_dir)
+log = condor-logs/pdhd-scaling-$(ClusterId).log
+output = condor-logs/pdhd-scaling-$(ClusterId).$(ProcId).out
+error = condor-logs/pdhd-scaling-$(ClusterId).$(ProcId).err
+
+environment = "PROJECT_DIR=$(project_dir) DATASET=$(dataset) IMAGE=$(image) RESULTS_DIR=$(results_dir) MODE=scaling GPUS=1 REPEATS=5 SAMPLE_MS=500"
+notification = Error
+queue 1

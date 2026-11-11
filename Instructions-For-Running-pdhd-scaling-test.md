@@ -1,342 +1,344 @@
-# Running PDHD scaling tests on Perlmutter
+# Running the PDHD scaling tests with HTCondor on `sgpu`
 
-Updated 2026-11-09. Run GPU processing on allocated compute nodes. Use a
-login node to edit scripts, submit jobs, and inspect results.
+Updated 2026-11-11. These tests have **not** been run on `sgpu`. They were
+prepared on a machine without access to the BNL Condor pool or GPUs and are
+being handed off for user execution and validation.
 
-There are two workflows:
+The Condor test uses the existing PDHD runner with its `local` launcher inside
+one HTCondor slot. It does not add a native Condor launcher to `pdhd.py`.
+Therefore these are one-node tests. Do not use `--nodes` above one.
 
-- **Functional review:** short debug allocation, four repeated events, normal
-  completion and deliberate cancellation. This checks the runner.
-- **Scaling campaign:** fixed dataset, selected process/thread configurations,
-  warmups and repeated measurements. Use regular QOS for longer campaigns.
+No NVTX profiling is enabled. The Perlmutter reference campaign did not use
+NVTX, and adding it would create a different performance experiment.
 
-The user-reported review on 2026-11-09 passed normal Slurm cases and
-coordinator SIGTERM cleanup. Evidence is in
-`/pscratch/sd/a/abashyal/pdhd-runner-final-20261109T163451Z`.
-This is single-node functional coverage. Multi-node hardware execution,
-whole-job cancellation, allocation loss, and numerical equivalence remain
-unverified. No scaling-performance conclusion follows from this review.
+## 1. Files provided
 
-## 1. Paths, software, and inputs
-
-These examples use account `m5037_g`; replace it if charging another project.
-Set these variables in each new shell, or export them before `sbatch`:
-
-```bash
-export PROJECT_DIR=/global/u2/a/abashyal/spng-portability-tests
-export DATASET="$SCRATCH/pdhd-runner-review-61007458/data"
-export IMAGE=docker.io/abashyal/wirecell-spng:cuda80
-```
-
-The dataset must contain `dataset.json` and four matched archives,
-`adc-tpc0.npz` through `adc-tpc3.npz`. The example dataset has only four
-complete events, made from repeated copies. It supports at most four
-concurrent Wire-Cell processes. Verify it still exists before reserving GPUs;
-Scratch is temporary storage. Keep campaigns and large outputs on Scratch,
-and preserve important evidence in appropriate persistent storage.
-
-The project must also contain:
-
-- `infiles/legacy_roiuniter_090326.ts`: Torch model.
-- `wire-cell-data/`: detector response/geometry data.
-- `scaling/pdhd/`: runner, profile, NPZ helper, and Jsonnet configuration.
-
-The host needs `python3`, `srun`, `taskset`, and `podman-hpc`. Host Python runs
-the coordinator without requiring Torch or NumPy. Dataset preparation and
-planning use `/usr/bin/python3` in the image, which supplies NumPy and Torch.
-The image must also supply Wire-Cell and its SPNG plugins/configuration.
-
-Check image availability with `podman-hpc images`. If necessary, prepare it
-on a login node before the timed job:
-
-```bash
-podman-hpc pull "$IMAGE"
-# For an image built locally, instead migrate its existing tag:
-# podman-hpc migrate "$IMAGE"
-```
-
-Podman-HPC pull prepares a squashed image; locally built images need migration
-for compute-node use. Use a fixed image digest for reproducible measurements
-when available, and record the image ID/software versions. The runner uses
-`--gpu` and the Perlmutter profile's `slirp4netns` network setting.
-
-For new simulated ADC inputs, see
-[perlmutter-generation.md](scaling/pdhd/perlmutter-generation.md). To create a
-larger scaling dataset from four existing matched ADC archives, run the
-following **inside a compute allocation**, replacing `ADC_DIR` and choosing
-a fresh output directory:
-
-```bash
-export ADC_DIR="$SCRATCH/path-to-generated-adc"
-export DATASET="$SCRATCH/pdhd-data-32-$(date -u +%Y%m%dT%H%M%SZ)"
-podman-hpc run --rm --net=slirp4netns --entrypoint /usr/bin/python3 \
-  --volume "$PROJECT_DIR:$PROJECT_DIR:ro" \
-  --volume "$SCRATCH:$SCRATCH" --workdir "$PROJECT_DIR" \
-  "$IMAGE" scaling/pdhd/pdhd.py generate \
-  --adc "$ADC_DIR/adc-tpc0.npz" "$ADC_DIR/adc-tpc1.npz" \
-        "$ADC_DIR/adc-tpc2.npz" "$ADC_DIR/adc-tpc3.npz" \
-  --events 32 --repeat --output "$DATASET"
-```
-
-`--repeat` explicitly allows cyclic copies if fewer source events exist.
-Omit it when requiring independent available event IDs; the command then
-rejects an insufficient source count. Copies are useful for controlled load,
-but do not establish independent physics samples. Keep the same dataset and
-model across all cases being compared. Preparation copies/shards data and
-can require substantial storage and I/O time.
-
-## 2. Interactive functional review through debug QOS
-
-From a login node, obtain the allocation used by the review procedure:
-
-```bash
-srun --account=m5037_g --qos=debug --constraint=gpu \
-  --nodes=1 --ntasks=1 --cpus-per-task=32 --gpus-per-task=4 \
-  --time=00:30:00 --job-name=pdhd-final-review \
-  --pty bash --noprofile --norc
-```
-
-Inside the allocated shell, set the variables from section 1, then run:
-
-```bash
-export REVIEW_DIR="$SCRATCH/pdhd-runner-final-$(date -u +%Y%m%dT%H%M%SZ)"
-bash "$PROJECT_DIR/scaling/pdhd/tests/perlmutter_review.sh"
-cat "$REVIEW_DIR/normal/rounds.json"
-cat "$REVIEW_DIR/cancellation.json"
-```
-
-`REVIEW_DIR` must not already exist. The harness prepares fresh campaign
-snapshots and runs N=4 events, TBB=1, one physical core/process:
-
-1. P=1 using one GPU, then P=4 using two GPUs.
-2. A fresh P=4 campaign cancelled with coordinator SIGTERM after barrier release.
-
-Success prints `PASS: normal Slurm cases and cancellation; evidence: ...`.
-Both normal cases must report four verified events. The cancellation report
-must contain `passed: true`, a nonzero return code, failure records,
-`lock_removed: true`, and `leftover_containers: []`. Early work completion
-makes cancellation inconclusive. Inspect logs if the script exits early.
-
-The outer `srun --pty` shell occupies an existing Slurm step. The harness
-creates a private `srun` wrapper adding `--overlap` so sibling runner steps
-can start. That wrapper is specific to this functional test. Its PATH change
-is scoped to the commands in the harness.
-
-When finished, release the allocation:
-
-```bash
-exit
-```
-
-## 3. Interactive measured campaign through debug QOS
-
-For a custom short campaign, use `salloc` from a login node so the
-coordinator can launch steps directly, without an enclosing `srun --pty`
-step. Debug QOS currently allows at most 30 minutes. Keep the matrix small.
-
-```bash
-salloc --account=m5037_g --qos=debug --constraint=gpu \
-  --nodes=1 --ntasks-per-node=4 --cpus-per-task=8 \
-  --gpus-per-node=4 --time=00:30:00 --job-name=pdhd-scaling-debug
-```
-
-In the allocation shell, set section 1's variables. Prepare a campaign on a
-compute node with one short preparation step:
-
-```bash
-export CAMPAIGN="$SCRATCH/pdhd-scaling-debug-$SLURM_JOB_ID"
-srun --nodes=1 --ntasks=1 --cpus-per-task=8 --gpus-per-task=1 \
-  --cpu-bind=cores --exact \
-  podman-hpc run --rm --gpu --net=slirp4netns \
-  --entrypoint /usr/bin/python3 \
-  --volume "$PROJECT_DIR:$PROJECT_DIR:ro" \
-  --volume "$DATASET:$DATASET:ro" --volume "$SCRATCH:$SCRATCH" \
-  --workdir "$PROJECT_DIR" "$IMAGE" scaling/pdhd/pdhd.py plan \
-  --dataset "$DATASET" \
-  --model "$PROJECT_DIR/infiles/legacy_roiuniter_090326.ts" \
-  --image "$IMAGE" --profile perlmutter --launcher slurm \
-  --nodes 1 --processes 1 2 4 --threads 1 --cores-per-process 1 \
-  --gpus-per-node 4 --warmups 1 --repeats 3 \
-  --timeout 300 --barrier-timeout 120 \
-  --wirecell-data "$PROJECT_DIR/wire-cell-data" --output "$CAMPAIGN"
-
-python3 "$CAMPAIGN/suite/pdhd.py" run --campaign "$CAMPAIGN" \
-  > "$CAMPAIGN/run.log" 2>&1
-cat "$CAMPAIGN/scaling-summary.json"
-```
-
-Run the coordinator directly in the allocation shell. Its own `srun`
-commands launch one controller per active GPU. Do not wrap the coordinator
-in another `srun`. This example creates three cases and twelve total rounds
-(three warmups plus nine measured rounds). Estimate their duration from a
-pilot; they are not guaranteed to fit the debug limit. Use regular QOS if
-needed. Exit the allocation shell afterward.
-
-## 4. Regular-QOS batch campaign
-
-Save the following as `pdhd-scaling-regular.sbatch` in the project directory.
-This is a one-node example using the existing four-event dataset. It sweeps
-P=1,2,4 and TBB=1,2,4 with four physical cores reserved per process.
-
-```bash
-#!/bin/bash
-#SBATCH --account=m5037_g
-#SBATCH --qos=regular
-#SBATCH --constraint=gpu
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=4
-#SBATCH --cpus-per-task=8
-#SBATCH --gpus-per-node=4
-#SBATCH --time=02:00:00
-#SBATCH --job-name=pdhd-scaling
-#SBATCH --output=pdhd-scaling-%j.log
-
-set -euo pipefail
-export PROJECT_DIR=${PROJECT_DIR:-/global/u2/a/abashyal/spng-portability-tests}
-export DATASET=${DATASET:-$SCRATCH/pdhd-runner-review-61007458/data}
-export IMAGE=${IMAGE:-docker.io/abashyal/wirecell-spng:cuda80}
-export CAMPAIGN="$SCRATCH/pdhd-scaling-regular-$SLURM_JOB_ID"
-cd "$PROJECT_DIR"
-command -v python3
-command -v podman-hpc
-printf 'Job %s; campaign %s\n' "$SLURM_JOB_ID" "$CAMPAIGN"
-
-# Prepare/shard on one compute node; this step exits before measured steps.
-srun --nodes=1 --ntasks=1 --cpus-per-task=8 --gpus-per-task=1 \
-  --cpu-bind=cores --exact \
-  podman-hpc run --rm --gpu --net=slirp4netns \
-  --entrypoint /usr/bin/python3 \
-  --volume "$PROJECT_DIR:$PROJECT_DIR:ro" \
-  --volume "$DATASET:$DATASET:ro" --volume "$SCRATCH:$SCRATCH" \
-  --workdir "$PROJECT_DIR" "$IMAGE" scaling/pdhd/pdhd.py plan \
-  --dataset "$DATASET" \
-  --model "$PROJECT_DIR/infiles/legacy_roiuniter_090326.ts" \
-  --image "$IMAGE" --profile perlmutter --launcher slurm \
-  --nodes 1 --processes 1 2 4 --threads 1 2 4 --cores-per-process 4 \
-  --gpus-per-node 4 --warmups 1 --repeats 5 \
-  --timeout 1800 --barrier-timeout 300 \
-  --wirecell-data "$PROJECT_DIR/wire-cell-data" --output "$CAMPAIGN"
-
-# The batch shell coordinates; the runner launches its own Slurm steps.
-python3 "$CAMPAIGN/suite/pdhd.py" run --campaign "$CAMPAIGN" \
-  > "$CAMPAIGN/run.log" 2>&1
-cat "$CAMPAIGN/scaling-summary.json"
-```
-
-Submit and monitor from a login node:
-
-```bash
-cd "$PROJECT_DIR"
-sbatch --export=ALL pdhd-scaling-regular.sbatch
-# Substitute the job ID printed by sbatch:
-squeue -j JOBID
-sacct -j JOBID --format=JobID,JobName,State,Elapsed,ExitCode
-# Read the submission-directory log and the campaign's run.log.
-tail -n 60 pdhd-scaling-JOBID.log
-```
-
-Slurm directives do not expand shell variables. Edit directives in the file
-or override them on submission, for example:
-
-```bash
-sbatch --account=m5037_g --time=04:00:00 pdhd-scaling-regular.sbatch
-```
-
-Regular GPU QOS currently permits up to 48 hours and allocates exclusive
-nodes. The two-hour request above is a starting estimate, not a measured
-runtime. Nine cases with one warmup and five repeats produce 54 rounds.
-Budget preparation, container startup, processing, validation, assembly and
-cleanup; per-round `--timeout` does not set the job's walltime. Increase N
-beyond four for useful sustained measurements, using the preparation step
-in section 1 and exporting the resulting `DATASET` before submission.
-
-## 5. Choosing a matrix and sizing the allocation
-
-`--nodes`, `--processes`, and `--threads` form a Cartesian product.
-`--processes` is the total Wire-Cell process count across all nodes;
-`--threads` is the TBB limit per process. `--torch-threads` defaults to one.
-The Perlmutter profile uses 64 physical CPU cores/node and two Slurm logical
-CPUs per physical core. `--cores-per-process` must be at least the largest
-TBB thread count; it remains fixed across the campaign.
-
-For each case, let:
-
-- `Pnode = total_processes / nodes` (must be an integer).
-- `G = min(Pnode, gpus_per_node)` active GPU controllers per node.
-- `S = ceil(Pnode / G)` maximum process slots per controller.
-- `C = cores_per_process` physical cores per process.
-
-Each controller requests `2 × S × C` Slurm CPUs. Provision at least
-`G × 2 × S × C` Slurm CPUs and G GPUs per node for that case. Uniform
-controller requests can include padding, so checking only `Pnode × C`
-is insufficient. The planner rejects requests exceeding physical capacity.
-The allocation must cover the maximum requirements across the entire matrix.
-
-The regular example's maximum is four controllers × eight logical CPUs =
-32 Slurm CPUs/node, with four GPUs. GPU use grows from one to four as P
-grows. For a packing experiment at fixed four GPUs, use P=4,8,16 with at least
-16 events. With C=4, its maximum needs four controllers × 32 logical CPUs =
-128 Slurm CPUs/node: change `--cpus-per-task=32` in the allocation directives.
-Keep the preparation step at eight CPUs if desired.
-
-To explore nodes=1,2 at a fixed four processes/GPU, prepare **separate plans**
-for `(nodes=1, processes=4)` and `(nodes=2, processes=8)`, with identical
-N, image, model, threads, and cores/process. Submit each with the matching
-node count and a fresh campaign path. At least eight events are needed.
-A single `--nodes 1 2 --processes 4 8` command also creates unwanted cross
-combinations. Separate campaigns require an explicit cross-campaign analysis;
-the built-in summary only compares cases in its own campaign. Multi-node
-examples are proposed configurations, pending hardware validation. All nodes
-must see the same project, campaign, detector-data paths and migrated image.
-
-## 6. Results, validation, and interrupted runs
-
-Inspect these files under `CAMPAIGN`:
-
-| File | Meaning |
+| File | Purpose |
 | --- | --- |
-| `campaign.json` | Matrix, profile, input hashes, image, and timing definition |
-| `run.log` | Coordinator errors and progress |
-| `rounds.json`, `rounds.csv` | Successful round records, including warmups |
-| `scaling-summary.json` | Measured throughput means, standard deviations, completeness |
-| `rounds/CASE/ROUND/summary.json` | Event count and timing for one validated round |
-| `rounds/CASE/ROUND/rank*/launch.json`, `ready.json` | Host/container CPU topology, masks, GPU identities |
-| `rounds/CASE/ROUND/events/` | Assembled complete-event outputs |
-| `rounds/CASE/ROUND/failed.json`, `launcher.log`, `cleanup.log` | Failure and teardown evidence when present |
+| `scaling/pdhd/pdhd-condor.sh` | Common HTCondor executable |
+| `scaling/pdhd/pdhd-functional.sub` | Short one-GPU functional test |
+| `scaling/pdhd/pdhd-scaling.sub` | Default one-GPU process-packing study |
+| `scaling/pdhd/pdhd-scaling-4gpu.sub` | Optional four-GPU scaling study |
+| `scaling/pdhd/tests/condor_campaign.py` | Preflight, campaign execution, GPU telemetry, validation, and report generation |
 
-Require all planned measured rounds, `complete: true`, and the intended
-`verified_events` in each round before comparing performance. Structural
-validation does not establish numerical equivalence. `events_per_min` uses
-the barrier-release-to-last-processing-finish window; the end-to-end rate
-also includes startup, validation and assembly. Warmups are excluded from
-means. Built-in GPU scaling comparisons require a fixed process/GPU ratio;
-thread and packing sweeps need their own interpretation. Record GPU memory
-variant and software versions when comparing jobs.
+The test driver produces the throughput, scaling, GPU, CPU, memory, timing,
+resource-productivity, and telemetry-coverage metrics used in
+`2026-11-10_17-40-54_UTC-pdhd-61095945-telemetry-performance.md`.
 
-The campaign snapshots its runner, configuration, model and data shards.
-Create a fresh campaign after changing code, inputs or parameters. Existing
-round directories are not resumable: rerunning the same campaign can fail
-on existing output paths. If a run fails, inspect its logs before planning
-a new campaign. To summarize successful rounds already written:
+## 2. Required inputs on `sgpu`
+
+Log in to `sgpu`, enter the shared project checkout, and define these four
+absolute paths:
 
 ```bash
-python3 "$CAMPAIGN/suite/pdhd.py" summarize --campaign "$CAMPAIGN"
+ssh sgpu
+cd /path/to/spng-portability-tests
+
+export PROJECT_DIR="$PWD"
+export DATASET=/shared/path/to/pdhd-dataset
+export IMAGE=/shared/path/to/wirecell-spng.sif
+export RESULTS_DIR=/shared/path/to/pdhd-condor-results
 ```
 
-This can produce a partial summary; it does not finish missing rounds.
-The runner handles coordinator SIGTERM/SIGINT, but whole-job `scancel`,
-SIGKILL, allocation expiry and unreachable nodes have different cleanup
-limits. Do not assume the tested SIGTERM guarantee applies to them. Do not
-reset shared Podman storage or indiscriminately delete containers to recover
-a campaign. Retain failure evidence and inspect the recorded campaign CIDs.
+`PROJECT_DIR`, `DATASET`, `IMAGE`, and `RESULTS_DIR` must be visible at the
+same absolute paths on the Condor execute node. Do not use paths local only to
+the submit host.
+
+The image must be an existing SIF file. Do not use a `docker://` URI or pull
+the image during a measured job.
+
+The dataset must contain:
+
+```text
+dataset.json
+adc-tpc0.npz
+adc-tpc1.npz
+adc-tpc2.npz
+adc-tpc3.npz
+```
+
+The project must contain:
+
+```text
+infiles/legacy_roiuniter_090326.ts
+wire-cell-data/
+scaling/pdhd/pdhd.py
+```
+
+Check the inputs without starting a job:
+
+```bash
+command -v condor_submit
+command -v condor_q
+test -x "$PROJECT_DIR/scaling/pdhd/pdhd-condor.sh"
+test -r "$IMAGE"
+test -r "$DATASET/dataset.json"
+for apa in 0 1 2 3; do test -r "$DATASET/adc-tpc${apa}.npz"; done
+test -r "$PROJECT_DIR/infiles/legacy_roiuniter_090326.ts"
+test -d "$PROJECT_DIR/wire-cell-data"
+mkdir -p "$PROJECT_DIR/condor-logs" "$RESULTS_DIR"
+```
+
+The execute node must provide `python3`, `apptainer`, `nvidia-smi`, and
+`taskset`. The job checks these commands and fails before planning if any are
+missing.
+
+The reported `sgpu` host has two AMD EPYC 9355 sockets, 32 physical cores per
+socket, two hardware threads/core (64 physical cores and 128 logical CPUs),
+and ten NVIDIA L40S GPUs with 46,068 MiB/device. These are whole-node values.
+They do not mean that one Condor job owns all CPUs or GPUs visible in `lscpu`
+or `nvidia-smi`.
+
+## 3. Confirm the available GPU slots
+
+The BNL Condor environment has previously exposed an assigned GPU as a short
+UUID such as `GPU-47806d5a`. The driver resolves that token to exactly one full
+GPU UUID and records both values. It does not assume GPU index 0 and does not
+use `nvidia-smi pmon -i` with a UUID.
+
+The supplied `nvidia-smi` output shows all ten host GPUs, including GPUs used
+by other jobs. That output is inventory, not allocation. The test uses only
+the UUIDs listed in its own `CUDA_VISIBLE_DEVICES`; it fails if their count
+differs from `request_gpus` or if a token is missing, ambiguous, or repeated.
+
+Inspect the pool before choosing a submit file:
+
+```bash
+condor_status -compact
+condor_status -constraint 'Gpus > 0' \
+  -af Name Cpus Memory Gpus CUDACapability CUDAGlobalMemoryMb
+```
+
+Use `pdhd-scaling.sub` unless this output confirms that a single slot can
+provide four GPUs and at least 16 physical CPU cores. The default study uses
+one GPU because that is consistent with the previously observed `sgpu`
+allocation.
+
+The submit requests are intentionally limited to the maximum active workload:
+
+| Job | GPUs | CPUs | Memory | Execute disk | Reason |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Functional | 1 | 4 | 12 GB | 2 GB | P=4 with one core/process; reference peak RSS was about 7.4 GiB total |
+| One-GPU scaling | 1 | 16 | 16 GB | 2 GB | P=4 with four cores/process; reference peak process-RSS sum was below 10 GiB |
+| Optional four-GPU scaling | 4 | 16 | 16 GB | 2 GB | Same four host processes/16 cores; only GPU placement changes |
+
+Large datasets, the SIF, campaign shards, and results remain on shared
+storage, so the jobs do not request execute-node disk for those files.
+`request_disk = 2GB` is only headroom for Condor/Apptainer temporary use.
+
+The CPU requests assume one Condor CPU resource corresponds to one usable CPU
+in the job affinity mask. The driver counts distinct physical cores from
+`sched_getaffinity()` and refuses to run if it receives fewer than four for
+the functional test or sixteen for the scaling test. If that check fails
+because the pool assigns SMT siblings, report `preflight.json` and the Condor
+slot configuration; do not increase CPU requests before confirming the
+mapping.
+
+The two studies answer different questions:
+
+- `pdhd-scaling.sub`: P=1,2,4 Wire-Cell processes share one GPU. This is a
+  process-packing/concurrency study. Multi-GPU efficiency is reported as N/A.
+- `pdhd-scaling-4gpu.sub`: P=1,2,4 use one GPU/process. This is comparable in
+  resource layout to the one-node Perlmutter scaling matrix.
+
+Do not represent the one-GPU packing results as multi-GPU scaling.
+
+## 4. Run the functional test first
+
+The functional test requests one GPU, four CPUs, 12 GB RAM, and 2 GB execute
+disk. It runs P=1 and P=4 with one core/process, no warmup, and one measured
+round. A four-event dataset is sufficient.
+
+First ask Condor to parse the submit description without submitting it:
+
+```bash
+cd "$PROJECT_DIR"
+condor_submit -dry-run - scaling/pdhd/pdhd-functional.sub | sed -n '1,160p'
+```
+
+If the dry run shows the expected absolute paths and resource requests,
+submit it:
+
+```bash
+condor_submit scaling/pdhd/pdhd-functional.sub
+```
+
+Record the cluster ID printed by `condor_submit`, then monitor it:
+
+```bash
+export CLUSTER_ID=REPLACE_WITH_CLUSTER_ID
+condor_q "$CLUSTER_ID" -better-analyze
+condor_q "$CLUSTER_ID" \
+  -af ClusterId ProcId JobStatus RemoteHost RequestCpus RequestGpus
+tail -f "$PROJECT_DIR/condor-logs/pdhd-functional-${CLUSTER_ID}.0.out"
+```
+
+The functional result directory is:
+
+```bash
+export RUN_DIR="$RESULTS_DIR/pdhd-functional-${CLUSTER_ID}.0"
+```
+
+After completion, inspect:
+
+```bash
+condor_history "$CLUSTER_ID" -limit 1 \
+  -af ClusterId ProcId JobStatus ExitCode HoldReason RemoteHost RemoteWallClockTime
+cat "$PROJECT_DIR/condor-logs/pdhd-functional-${CLUSTER_ID}.0.err"
+cat "$RUN_DIR/preflight.json"
+cat "$RUN_DIR/telemetry-summary.md"
+cat "$RUN_DIR/telemetry-coverage.json"
+```
+
+A successful functional result must have:
+
+- Condor exit code zero;
+- a final `PASS: HTCondor PDHD one-gpu-packing` message;
+- exactly one allocated and resolved GPU UUID;
+- completed P=1 and P=4 cases;
+- the intended verified event count in both rounds;
+- no `failed.json` files;
+- nonempty `host-gpu.csv`; and
+- `telemetry-summary.md`, `case-metrics.csv`, and
+  `gpu-process-windows.csv`.
+
+Check failures explicitly:
+
+```bash
+find "$RUN_DIR/campaign/rounds" -name failed.json -print
+find "$RUN_DIR/campaign/rounds" -name summary.json -print
+```
+
+Do not submit the measured campaign until this test succeeds.
+
+## 5. Run the default one-GPU packing campaign
+
+Use the prepared 32-event dataset for useful measurements. The default job
+requests one GPU, 16 CPUs, 16 GB RAM, and 2 GB execute disk. It runs the
+Cartesian product P=1,2,4 and TBB=1,2,4 with four assigned physical
+cores/process, one warmup, and five measured rounds/case.
+
+Set `DATASET` to the 32-event directory, repeat the input checks from section
+2, and submit:
+
+```bash
+cd "$PROJECT_DIR"
+condor_submit -dry-run - scaling/pdhd/pdhd-scaling.sub | sed -n '1,160p'
+condor_submit scaling/pdhd/pdhd-scaling.sub
+```
+
+Monitor it with the commands from section 4, substituting the new cluster ID
+and `pdhd-scaling` log prefix. Its result directory is:
+
+```bash
+export CLUSTER_ID=REPLACE_WITH_CLUSTER_ID
+export RUN_DIR="$RESULTS_DIR/pdhd-scaling-${CLUSTER_ID}.0"
+```
+
+Inspect the completed report:
+
+```bash
+cat "$RUN_DIR/telemetry-summary.md"
+cat "$RUN_DIR/telemetry-coverage.json"
+column -s, -t < "$RUN_DIR/case-metrics.csv" | less -S
+```
+
+All 45 measured rounds must be present: nine cases times five repeats.
+Warmups are additional rounds and are excluded from the tables.
+
+## 6. Optional four-GPU campaign
+
+Only use this test after `condor_status` confirms that `sgpu` can provide four
+GPUs in one slot. Otherwise the job may remain idle indefinitely.
+
+```bash
+cd "$PROJECT_DIR"
+condor_submit -dry-run - scaling/pdhd/pdhd-scaling-4gpu.sub | sed -n '1,160p'
+condor_submit scaling/pdhd/pdhd-scaling-4gpu.sub
+```
+
+The result directory is:
+
+```bash
+export CLUSTER_ID=REPLACE_WITH_CLUSTER_ID
+export RUN_DIR="$RESULTS_DIR/pdhd-scaling-${CLUSTER_ID}.0"
+```
+
+This uses the same output prefix as the default scaling campaign; unique
+Condor cluster IDs keep the directories separate.
+
+The four-GPU report includes process speedup and multi-GPU scaling efficiency
+relative to P=1 at the same TBB setting.
+
+## 7. What the test records
+
+| Output | Contents |
+| --- | --- |
+| `preflight.json` | Host, Condor environment, CPU affinity, original GPU allocation token, resolved full UUID, and initial GPU readings |
+| `nvidia-smi-L.txt` | GPUs visible on the execute host |
+| `image.sha256` | SIF checksum |
+| `plan.log` | Campaign planning output |
+| `run.log` | Coordinator output |
+| `host-gpu.csv` | Timestamped UUID, GPU busy %, used MiB, power, and query duration |
+| `gpu-process-windows.csv` | GPU/CPU/RSS measurements selected for each measured process window |
+| `case-metrics.csv` | Aggregated throughput, scaling, resource, timing, and telemetry metrics |
+| `telemetry-coverage.json` | Raw/selected sample counts, gaps, repeats, and dataset repetition status |
+| `telemetry-summary.md` | Human-readable throughput, resource, and timing tables |
+| `campaign/` | Frozen runner, model, shards, validated rounds, outputs, and structural summaries |
+
+GPU samples are matched by full UUID and process timestamps. Missing or sparse
+telemetry fails the job; it is never reported as zero utilization. GPU busy %
+is device activity, not achieved FLOPS or kernel occupancy. Power and memory
+are device-wide readings. For one-GPU packing, overlapping process windows
+observe the same shared device and are not process-exclusive GPU measurements.
+
+## 8. Holds, failures, cancellation, and reruns
+
+Useful Condor `JobStatus` values are 1 idle, 2 running, 5 held, and 6
+transferring output. For a held job:
+
+```bash
+condor_q "$CLUSTER_ID" -af ClusterId ProcId JobStatus HoldReason
+cat "$PROJECT_DIR/condor-logs/"*"${CLUSTER_ID}.0.err"
+tail -n 100 "$RUN_DIR/plan.log" 2>/dev/null
+tail -n 100 "$RUN_DIR/run.log" 2>/dev/null
+```
+
+Cancel a job with:
+
+```bash
+condor_rm "$CLUSTER_ID"
+```
+
+The coordinator handles SIGTERM/SIGINT, but eviction grace periods and
+SIGKILL behavior are controlled by the site. Treat an interrupted round as a
+failure, retain its evidence, and do not include it in performance results.
+
+Every submission uses a fresh directory derived from its Condor cluster and
+process IDs. Do not rerun manually into an existing `RUN_DIR`; campaigns are
+immutable and incomplete round directories are not resumable.
+
+## 9. Results to report back
+
+For each attempted job, report:
+
+1. the submit file used and Condor cluster ID;
+2. the output of the `condor_history` command from section 4;
+3. the Condor `.out` and `.err` files;
+4. `preflight.json` and `nvidia-smi-L.txt`;
+5. `plan.log` and `run.log`, or at least their last 100 lines;
+6. `telemetry-summary.md`, `telemetry-coverage.json`, and
+   `case-metrics.csv` when produced; and
+7. every `failed.json` if the job did not pass.
+
+Also state the dataset event count, `repeated_copies` value, SIF path, and
+whether the run was the one-GPU packing or four-GPU scaling study. Do not
+claim physics equivalence from structural validation alone.
 
 ## References
 
-NERSC guidance checked 2026-11-09:
-
-- [Interactive allocations](https://docs.nersc.gov/jobs/interactive/)
-- [GPU QOS limits and charges](https://docs.nersc.gov/jobs/policy/)
-- [Running jobs on Perlmutter](https://docs.nersc.gov/systems/perlmutter/running-jobs/)
-- [Podman-HPC image preparation and GPU support](https://docs.nersc.gov/development/containers/podman-hpc/overview/)
-- [Scratch filesystem](https://docs.nersc.gov/filesystems/perlmutter-scratch/)
-- [Runner test methods and limits](scaling/pdhd/TESTING.md)
+- [Condor/SPNG requirements used for this handoff](SKILL-Condor.md)
+- [Reference Perlmutter telemetry report](2026-11-10_17-40-54_UTC-pdhd-61095945-telemetry-performance.md)
+- [Runner test scope and limitations](scaling/pdhd/TESTING.md)
+- [HTCondor GPU jobs](https://htcondor.readthedocs.io/en/latest/users-manual/submitting-a-job.html#jobs-that-require-gpus)
+- [HTCondor GPU UUID discovery](https://htcondor.readthedocs.io/en/main/man-pages/condor_gpu_discovery.html)

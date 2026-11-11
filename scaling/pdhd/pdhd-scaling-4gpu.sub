@@ -1,0 +1,30 @@
+# Optional Perlmutter-equivalent resource sweep; submit only if sgpu advertises
+# a single slot with four GPUs and at least 16 physical CPU cores.
+universe = vanilla
+
+project_dir = $ENV(PROJECT_DIR)
+dataset = $ENV(DATASET)
+image = $ENV(IMAGE)
+results_dir = $ENV(RESULTS_DIR)
+
+executable = $(project_dir)/scaling/pdhd/pdhd-condor.sh
+arguments = $(ClusterId).$(ProcId)
+
+request_gpus = 4
+request_cpus = 16
+request_memory = 16GB
+request_disk = 2GB
+should_transfer_files = NO
+
+initialdir = $(project_dir)
+log = condor-logs/pdhd-scaling-4gpu-$(ClusterId).log
+output = condor-logs/pdhd-scaling-4gpu-$(ClusterId).$(ProcId).out
+error = condor-logs/pdhd-scaling-4gpu-$(ClusterId).$(ProcId).err
+
+# Uncomment only after confirming these properties are advertised by sgpu.
+# require_gpus = Capability >= 8.0
+# gpus_minimum_memory = 40000
+
+environment = "PROJECT_DIR=$(project_dir) DATASET=$(dataset) IMAGE=$(image) RESULTS_DIR=$(results_dir) MODE=scaling GPUS=4 REPEATS=5 SAMPLE_MS=500"
+notification = Error
+queue 1
