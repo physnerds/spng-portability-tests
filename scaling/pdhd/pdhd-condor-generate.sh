@@ -19,9 +19,16 @@ run_dir="$RESULTS_DIR/pdhd-generation-$job_tag"
 [[ "$source_events" =~ ^[1-9][0-9]*$ ]] || {
     echo 'SOURCE_EVENTS must be a positive integer' >&2; exit 2;
 }
+(( source_events <= 42 )) || {
+    echo 'SOURCE_EVENTS must not exceed the 42 upstream line configurations' >&2; exit 2;
+}
 [[ "$repeat_input" == 0 || "$repeat_input" == 1 ]] || {
     echo 'REPEAT_INPUT must be 0 or 1' >&2; exit 2;
 }
+if [[ "$repeat_input" == 0 ]] && (( dataset_events > source_events )); then
+    echo 'DATASET_EVENTS must not exceed SOURCE_EVENTS when REPEAT_INPUT=0' >&2
+    exit 2
+fi
 
 # A complete-looking existing dataset makes this optional stage a no-op. The
 # scaling planner subsequently validates its manifest, archive structure, and
@@ -41,8 +48,6 @@ if [[ -e "$DATASET" ]]; then
     exit 2
 fi
 
-: "${DEPOS:?Set DEPOS to the shared input deposit NPZ when DATASET is absent}"
-test -r "$DEPOS"
 test -r "$IMAGE"
 test -d "$PROJECT_DIR/wire-cell-data"
 for command in python3 apptainer sha256sum; do
@@ -53,7 +58,7 @@ done
 
 mkdir -p "$RESULTS_DIR" "$(dirname "$DATASET")"
 mkdir "$run_dir"
-cp "$PROJECT_DIR/scaling/pdhd/"{pdhd.jsonnet,npz_events.py,generation_check.py} "$run_dir/"
+cp "$PROJECT_DIR/scaling/pdhd/"{pdhd.jsonnet,npz_events.py,generation_check.py,generate_line_depos.py} "$run_dir/"
 
 exec > >(tee -a "$run_dir/job.stdout") \
      2> >(tee -a "$run_dir/job.stderr" >&2)
@@ -69,16 +74,14 @@ record = dict(host=socket.gethostname(), condor_job_id=sys.argv[2],
 Path(sys.argv[1]).write_text(json.dumps(record, indent=2)+'\n')
 PY
 
-printf 'image=%s\ndepos=%s\nsource_events=%s\ndataset_events=%s\nrepeat_input=%s\njob=%s\n' \
-    "$IMAGE" "$DEPOS" "$source_events" "$dataset_events" "$repeat_input" "$job_tag" \
+printf 'image=%s\ndepo_generator=%s\nsource_events=%s\ndataset_events=%s\nrepeat_input=%s\njob=%s\n' \
+    "$IMAGE" 'spng/test/spng-ssss:line_depo' "$source_events" "$dataset_events" "$repeat_input" "$job_tag" \
     > "$run_dir/request.txt"
 
-# Stage 1: select source deposits, simulate four matched APA ADC archives, and
-# structurally validate them. Simulation uses serial CPU detector-response
-# components and intentionally does not reserve or expose a GPU.
+# Stage 1: run concrete targets through the existing spng-ssss line_depo DAG,
+# then simulate and validate four matched APA ADC archives. Both are CPU-only.
 apptainer exec --cleanenv \
     --env "SOURCE_EVENTS=$source_events" \
-    --bind "$DEPOS:/input/depos.npz:ro" \
     --bind "$PROJECT_DIR/wire-cell-data:/wirecell-data:ro" \
     --bind "$run_dir:/work" \
     "$IMAGE" /bin/bash -c '
@@ -87,7 +90,14 @@ apptainer exec --cleanenv \
         export WIRECELL_PATH=/opt/wirecell-view/share/wirecell:/opt/wire-cell-toolkit/cfg:/opt/wire-cell-toolkit/spng/cfg:/wirecell-data
         /usr/bin/python3 -c "import numpy; print(numpy.__version__)" > /work/numpy-version.txt
         wire-cell --version > /work/wire-cell-version.txt 2>&1
-        /usr/bin/python3 /work/generation_check.py prepare /input/depos.npz "$SOURCE_EVENTS"
+        command -v wcpy > /work/wcpy-path.txt
+        command -v snakemake > /work/snakemake-path.txt
+        snakemake --version > /work/snakemake-version.txt 2>&1
+        /usr/bin/python3 /work/generate_line_depos.py \
+            --events "$SOURCE_EVENTS" --output /work/generated-depos.npz \
+            --metadata /work/depo-generation.json --workdir /work/line-depos \
+            --snakefile /opt/wire-cell-toolkit/spng/test/spng-ssss
+        /usr/bin/python3 /work/generation_check.py prepare /work/generated-depos.npz "$SOURCE_EVENTS"
         wire-cell -l stdout -A stage=sim -A detname=pdhd -A napa=4 -A apa=-1 \
             -A engine=Pgrapher -A device=cpu -A input=/work/depos.npz \
             -A output=/work/adc.npz /work/pdhd.jsonnet

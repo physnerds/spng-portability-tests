@@ -1,12 +1,11 @@
 # Optional first workflow stage. Submit only when DATASET is not already ready.
-# Export PROJECT_DIR, DATASET, IMAGE, RESULTS_DIR, and DEPOS first.
+# Export PROJECT_DIR, DATASET, IMAGE, and RESULTS_DIR first.
 universe = vanilla
 
 project_dir = $ENV(PROJECT_DIR)
 dataset = $ENV(DATASET)
 image = $ENV(IMAGE)
 results_dir = $ENV(RESULTS_DIR)
-depos = $ENV(DEPOS)
 
 # Override these on condor_submit's command line when needed.
 dataset_events = 32
@@ -27,6 +26,6 @@ log = condor-logs/pdhd-generation-$(ClusterId).log
 output = condor-logs/pdhd-generation-$(ClusterId).$(ProcId).out
 error = condor-logs/pdhd-generation-$(ClusterId).$(ProcId).err
 
-environment = "PROJECT_DIR=$(project_dir) DATASET=$(dataset) IMAGE=$(image) RESULTS_DIR=$(results_dir) DEPOS=$(depos) DATASET_EVENTS=$(dataset_events) SOURCE_EVENTS=$(source_events) REPEAT_INPUT=$(repeat_input)"
+environment = "PROJECT_DIR=$(project_dir) DATASET=$(dataset) IMAGE=$(image) RESULTS_DIR=$(results_dir) DATASET_EVENTS=$(dataset_events) SOURCE_EVENTS=$(source_events) REPEAT_INPUT=$(repeat_input)"
 notification = Error
 queue 1
