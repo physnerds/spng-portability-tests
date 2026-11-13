@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+exec {wcpy} gen detlinegen \
+  --offset {offset} \
+  --detector={detector} \
+  --plane={plane} \
+  --angle-coords={angle_coords} \
+  --theta_xz={theta_xz} \
+  --theta_y={theta_y} \
+  --output_depos {output_depos} \
+  --output_meta {output_meta}

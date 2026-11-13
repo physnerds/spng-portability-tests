@@ -17,7 +17,8 @@ NVTX, and adding it would create a different performance experiment.
 | --- | --- |
 | `scaling/pdhd/pdhd-condor-generate.sh` | Optional CPU-only event-generation and dataset-preparation executable |
 | `scaling/pdhd/pdhd-generate.sub` | Resource-matched optional generation job |
-| `scaling/pdhd/generate_line_depos.py` | Driver for selected upstream `spng-ssss` `line_depo` DAG targets and deterministic deposit-event assembly |
+| `scaling/pdhd/generate_line_depos.py` | Configurable direct-`wcpy` line-deposit generator and deterministic event assembler |
+| `scaling/pdhd/line-depo-template.sh.in` | Bash command template rendered once per line configuration |
 | `scaling/pdhd/pdhd-condor.sh` | Common HTCondor executable |
 | `scaling/pdhd/pdhd-functional.sub` | Short one-GPU functional test |
 | `scaling/pdhd/pdhd-scaling.sub` | Default one-GPU process-packing study |
@@ -61,12 +62,13 @@ adc-tpc2.npz
 adc-tpc3.npz
 ```
 
-If `DATASET` is absent, the generation job first invokes concrete deposit
-targets in the existing upstream `spng/test/spng-ssss` Snakefile. Its
-`line_depo` rule runs `wcpy gen detlinegen` with detector `pdhd`, the upstream
-`+1*m` X offset, wire-plane angle coordinates, planes 0–2, and the upstream
-theta grid. The job then simulates four matched APA ADC archives, validates
-them, and creates a `DATASET_EVENTS`-event scaling dataset.
+If `DATASET` is absent, the generation job renders a Bash template and runs
+`wcpy gen detlinegen` directly for each requested configuration. Its defaults
+are detector `pdhd`, the `+1*m` X offset, wire-plane angle coordinates, planes
+0–2, and the established fourteen-angle theta grid. It has no runtime
+dependency on the `spng-ssss` Snakefile or Snakemake. The job then simulates
+four matched APA ADC archives, validates them, and creates a
+`DATASET_EVENTS`-event scaling dataset.
 
 Defaults are one generated line-deposit event and 32 output events with
 explicit repetition. Repetition is recorded in `dataset.json`; it creates
@@ -80,6 +82,8 @@ The project must contain:
 infiles/legacy_roiuniter_090326.ts
 wire-cell-data/
 scaling/pdhd/pdhd.py
+scaling/pdhd/generate_line_depos.py
+scaling/pdhd/line-depo-template.sh.in
 ```
 
 Check the inputs without starting a job:
@@ -91,6 +95,7 @@ test -x "$PROJECT_DIR/scaling/pdhd/pdhd-condor.sh"
 test -r "$IMAGE"
 test -r "$PROJECT_DIR/infiles/legacy_roiuniter_090326.ts"
 test -d "$PROJECT_DIR/wire-cell-data"
+test -r "$PROJECT_DIR/scaling/pdhd/line-depo-template.sh.in"
 mkdir -p "$PROJECT_DIR/condor-logs" "$RESULTS_DIR"
 
 if test -r "$DATASET/dataset.json"; then
@@ -191,8 +196,8 @@ test ! -e "$DATASET"
 condor_submit -dry-run - scaling/pdhd/pdhd-generate.sub | sed -n '1,160p'
 ```
 
-The default runs `line_depo` once and creates 32 output events from that one
-generated deposit event, explicitly allowing repeated copies. To generate 32
+The default runs one rendered `wcpy` command and creates 32 output events from
+that generated deposit event, explicitly allowing repeated copies. To run 32
 different line configurations and prohibit repetition, override the submit
 variables:
 
@@ -232,9 +237,9 @@ for apa in 0 1 2 3; do test -r "$DATASET/adc-tpc${apa}.npz"; done
 
 The generation job has three ordered stages:
 
-1. Snakemake runs the requested concrete targets through the existing upstream
-   `line_depo` rule. Individual one-event files are merged with event IDs
-   0…N−1.
+1. `generate_line_depos.py` renders a parameterized Bash script for each
+   configuration and runs `wcpy gen detlinegen` directly. Individual one-event
+   files are merged with event IDs 0…N−1.
 2. PDHD simulation uses serial CPU `Pgrapher` with `device=cpu` to create and
    structurally validate four matched APA ADC archives.
 3. `pdhd.py generate` creates the immutable dataset manifest and requested
@@ -242,10 +247,10 @@ The generation job has three ordered stages:
 
 It requests no GPU because all three stages are CPU-only. It requests one CPU,
 8 GB RAM, and 2 GB execute disk. Generated deposits, metadata, ADC archives,
-and the final dataset are written to shared storage. The SIF must contain
-`snakemake`, `wcpy`, `wire-cell`, the upstream Snakefile at
-`/opt/wire-cell-toolkit/spng/test/spng-ssss`, and `/usr/bin/python3` with
-NumPy.
+and the final dataset are written to shared storage. The SIF environment used
+by the job must provide `wcpy`, `wire-cell`, and `/usr/bin/python3` with NumPy.
+The interactive runbook documents installing WireCell Python into a temporary
+venv when `wcpy` is not already present in the image.
 
 If generation fails after creating a partial `DATASET`, preserve the logs and
 move the partial directory aside before retrying with a fresh target. The
@@ -382,7 +387,7 @@ relative to P=1 at the same TBB setting.
 
 | Output | Contents |
 | --- | --- |
-| Generation `depo-generation.json`, `generated-depos.npz`, `line-depos/` | Snakefile command and targets, line geometry parameters, merged deposit archive, source metadata, and Snakemake log |
+| Generation `depo-generation.json`, `generated-depos.npz`, `line-depos/` | Template hash, geometry parameters, merged deposit archive, rendered Bash scripts, source metadata, and per-line `wcpy` logs |
 | Generation `request.txt`, `generation.log`, `validation.json`, `dataset.log` | Deposit generation, CPU simulation, structural ADC validation, and dataset creation |
 | `preflight.json` | Host, Condor environment, CPU affinity, original GPU allocation token, resolved full UUID, and initial GPU readings |
 | `nvidia-smi-L.txt` | GPUs visible on the execute host |

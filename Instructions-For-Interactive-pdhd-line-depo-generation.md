@@ -18,6 +18,7 @@ export LINE_DEPO_OUTPUT="$PROJECT_DIR/pdhd-line-depos-interactive"
 test -r "$IMAGE"
 test -d "$PROJECT_DIR/wire-cell-data"
 test -r "$PROJECT_DIR/scaling/pdhd/generate_line_depos.py"
+test -r "$PROJECT_DIR/scaling/pdhd/line-depo-template.sh.in"
 mkdir -p "$LINE_DEPO_OUTPUT"
 ```
 
@@ -65,7 +66,6 @@ source /tmp/my-venv/bin/activate
 pip install uv
 ls -lht
 
-uv pip install snakemake
 uv tool install git+https://github.com/wirecell/wire-cell-python
 export PATH="$(uv tool dir --bin):$PATH"
 hash -r
@@ -88,10 +88,8 @@ Verify the environment before generating anything:
 
 ```bash
 command -v python
-command -v snakemake
 command -v wcpy
 
-snakemake --version
 wcpy --help >/dev/null
 ```
 
@@ -105,14 +103,12 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
-export SNAKEFILE=/opt/wire-cell-toolkit/spng/test/spng-ssss
-test -r "$SNAKEFILE"
 ```
 
 ## 5. Generate one line deposit directly with `wcpy`
 
-This is the command used by the upstream `line_depo` rule for plane 0 and a
-0-degree XZ angle:
+This uses the PDHD defaults adopted by the repository generator for plane 0
+and a 0-degree XZ angle:
 
 ```bash
 mkdir -p /work/pdhd-line-p0-txz0-ty90
@@ -147,9 +143,11 @@ pair.
 
 ## 6. Generate and merge multiple line deposits
 
-The repository helper asks the existing upstream Snakefile to run concrete
-`line_depo` targets and merges their one-event archives. The allowed event
-count is 1 through 42. To produce 32 distinct configurations:
+The repository helper renders
+`scaling/pdhd/line-depo-template.sh.in` once per configuration, runs each
+rendered Bash script, validates its one-event archive, and merges the results.
+It does not use Snakemake or `spng/test/spng-ssss` at runtime. The default grid
+contains 42 configurations. To produce the first 32:
 
 ```bash
 test ! -e /work/generated-depos.npz
@@ -161,7 +159,7 @@ python "$PROJECT_DIR/scaling/pdhd/generate_line_depos.py" \
   --output /work/generated-depos.npz \
   --metadata /work/depo-generation.json \
   --workdir /work/line-depos \
-  --snakefile "$SNAKEFILE"
+  --template "$PROJECT_DIR/scaling/pdhd/line-depo-template.sh.in"
 ```
 
 The three output paths must be fresh. The helper deliberately refuses to
@@ -172,7 +170,7 @@ Inspect the result:
 ```bash
 ls -lh /work/generated-depos.npz /work/depo-generation.json
 cat /work/depo-generation.json
-tail -n 100 /work/line-depos/snakemake.log
+find /work/line-depos -name wcpy.log -print
 find /work/line-depos/pdhd/line/depo -name data.npz | wc -l
 ```
 
@@ -180,12 +178,54 @@ For `--events 32`, the final command should report `32`. The merged archive is
 `/work/generated-depos.npz`, which maps to
 `$LINE_DEPO_OUTPUT/generated-depos.npz` on the host.
 
+The default parameter grid is equivalent to:
+
+```bash
+--detector pdhd \
+--offset '+1*m,0*m,0*m' \
+--angle-coords wire-plane \
+--planes 0,1,2 \
+--theta-xz-deg 0,1,3,5,10,20,30,45,60,75,80,82,84,89 \
+--theta-y-deg 90
+```
+
+All values may be overridden. For example, this creates six configurations
+from two planes and three paired angles:
+
+```bash
+python "$PROJECT_DIR/scaling/pdhd/generate_line_depos.py" \
+  --planes 0,2 \
+  --theta-xz-deg 0,15,30 \
+  --theta-y-deg 90 \
+  --output /work/custom-depos.npz \
+  --metadata /work/custom-depos.json \
+  --workdir /work/custom-line-depos \
+  --template "$PROJECT_DIR/scaling/pdhd/line-depo-template.sh.in"
+```
+
+One `--theta-y-deg` value is broadcast across all XZ angles. Alternatively,
+provide the same number of Y and XZ values to pair them positionally.
+
+Use `python .../generate_line_depos.py --help` for the full CLI. A custom file
+passed with `--template` may use these shell-quoted placeholders:
+
+```text
+{wcpy} {offset} {detector} {plane} {angle_coords}
+{theta_xz} {theta_y} {output_depos} {output_meta}
+```
+
+The default template is
+`scaling/pdhd/line-depo-template.sh.in`. Every rendered `generate.sh` is
+retained beside its `wcpy.log`, `data.npz`, and `meta.json` for provenance.
+In a custom template, write literal braces as `{{` and `}}` because Python
+formatting reserves single braces for placeholders.
+
 ## 7. Run the complete workflow with one Apptainer command
 
 Instead of entering an interactive shell and running sections 3–6 manually,
 the following single `apptainer exec` invocation creates the temporary venv,
-installs the required Python packages, generates 32 distinct line deposits,
-merges them, and verifies the number of Snakefile outputs.
+installs WireCell Python, generates 32 distinct line deposits, merges them,
+and verifies the number of direct `wcpy` outputs.
 
 Run it on the host after completing section 1. The bound output directory must
 be empty of outputs from a previous attempt.
@@ -218,7 +258,6 @@ apptainer exec \
     ls -lht
     export UV_CACHE_DIR=/tmp/uv-cache
 
-    uv pip install snakemake
     uv pip install --only-binary=gojsonnet \
       "git+https://github.com/WireCell/wire-cell-python.git"
 
@@ -227,11 +266,7 @@ apptainer exec \
     export MKL_NUM_THREADS=1
     export OPENBLAS_NUM_THREADS=1
 
-    SNAKEFILE=/opt/wire-cell-toolkit/spng/test/spng-ssss
-    test -r "$SNAKEFILE"
-    command -v snakemake
     command -v wcpy
-    snakemake --version
     wcpy --help >/dev/null
 
     python /project/scaling/pdhd/generate_line_depos.py \
@@ -239,7 +274,7 @@ apptainer exec \
       --output /work/generated-depos.npz \
       --metadata /work/depo-generation.json \
       --workdir /work/line-depos \
-      --snakefile "$SNAKEFILE"
+      --template /project/scaling/pdhd/line-depo-template.sh.in
 
     test -s /work/generated-depos.npz
     test -s /work/depo-generation.json
@@ -264,15 +299,16 @@ The host output directory will contain:
 generated-depos.npz
 depo-generation.json
 interactive-generation.log
-line-depos/snakemake.log
+line-depos/pdhd/line/depo/.../generate.sh
+line-depos/pdhd/line/depo/.../wcpy.log
 line-depos/pdhd/line/depo/.../data.npz
 line-depos/pdhd/line/depo/.../meta.json
 ```
 
-The command installs WireCell Python into the same temporary venv as
-Snakemake. This avoids `uv tool` isolation and prevents `gojsonnet` from being
-built from source. The temporary environment is not part of the retained test
-artifacts; only `/work` outputs are required after the command exits.
+The command installs WireCell Python into the temporary venv. This avoids
+`uv tool` isolation and prevents `gojsonnet` from being built from source. The
+temporary environment is not part of the retained test artifacts; only
+`/work` outputs are required after the command exits.
 
 ## 8. Leave the interactive container
 
@@ -286,7 +322,8 @@ On the host, retain at least:
 ```text
 pdhd-line-depos-interactive/generated-depos.npz
 pdhd-line-depos-interactive/depo-generation.json
-pdhd-line-depos-interactive/line-depos/snakemake.log
+pdhd-line-depos-interactive/line-depos/pdhd/line/depo/.../generate.sh
+pdhd-line-depos-interactive/line-depos/pdhd/line/depo/.../wcpy.log
 pdhd-line-depos-interactive/line-depos/pdhd/line/depo/.../data.npz
 pdhd-line-depos-interactive/line-depos/pdhd/line/depo/.../meta.json
 ```

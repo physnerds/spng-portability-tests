@@ -58,7 +58,7 @@ done
 
 mkdir -p "$RESULTS_DIR" "$(dirname "$DATASET")"
 mkdir "$run_dir"
-cp "$PROJECT_DIR/scaling/pdhd/"{pdhd.jsonnet,npz_events.py,generation_check.py,generate_line_depos.py} "$run_dir/"
+cp "$PROJECT_DIR/scaling/pdhd/"{pdhd.jsonnet,npz_events.py,generation_check.py,generate_line_depos.py,line-depo-template.sh.in} "$run_dir/"
 
 exec > >(tee -a "$run_dir/job.stdout") \
      2> >(tee -a "$run_dir/job.stderr" >&2)
@@ -75,11 +75,11 @@ Path(sys.argv[1]).write_text(json.dumps(record, indent=2)+'\n')
 PY
 
 printf 'image=%s\ndepo_generator=%s\nsource_events=%s\ndataset_events=%s\nrepeat_input=%s\njob=%s\n' \
-    "$IMAGE" 'spng/test/spng-ssss:line_depo' "$source_events" "$dataset_events" "$repeat_input" "$job_tag" \
+    "$IMAGE" 'wcpy gen detlinegen via line-depo-template.sh.in' "$source_events" "$dataset_events" "$repeat_input" "$job_tag" \
     > "$run_dir/request.txt"
 
-# Stage 1: run concrete targets through the existing spng-ssss line_depo DAG,
-# then simulate and validate four matched APA ADC archives. Both are CPU-only.
+# Stage 1: render direct wcpy Bash commands, then simulate and validate four
+# matched APA ADC archives. Both are CPU-only and do not depend on Snakemake.
 apptainer exec --cleanenv \
     --env "SOURCE_EVENTS=$source_events" \
     --bind "$PROJECT_DIR/wire-cell-data:/wirecell-data:ro" \
@@ -91,12 +91,10 @@ apptainer exec --cleanenv \
         /usr/bin/python3 -c "import numpy; print(numpy.__version__)" > /work/numpy-version.txt
         wire-cell --version > /work/wire-cell-version.txt 2>&1
         command -v wcpy > /work/wcpy-path.txt
-        command -v snakemake > /work/snakemake-path.txt
-        snakemake --version > /work/snakemake-version.txt 2>&1
         /usr/bin/python3 /work/generate_line_depos.py \
             --events "$SOURCE_EVENTS" --output /work/generated-depos.npz \
             --metadata /work/depo-generation.json --workdir /work/line-depos \
-            --snakefile /opt/wire-cell-toolkit/spng/test/spng-ssss
+            --template /work/line-depo-template.sh.in
         /usr/bin/python3 /work/generation_check.py prepare /work/generated-depos.npz "$SOURCE_EVENTS"
         wire-cell -l stdout -A stage=sim -A detname=pdhd -A napa=4 -A apa=-1 \
             -A engine=Pgrapher -A device=cpu -A input=/work/depos.npz \
