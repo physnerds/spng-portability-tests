@@ -60,8 +60,10 @@ generation consumes a GPU.
 Inside Apptainer:
 
 ```bash
-python -m venv /tmp/venv
-source /tmp/venv/bin/activate
+/opt/wirecell-view/bin/python -m venv /tmp/my-venv
+source /tmp/my-venv/bin/activate
+pip install uv
+ls -lht
 
 uv pip install snakemake
 uv tool install git+https://github.com/wirecell/wire-cell-python
@@ -178,7 +180,101 @@ For `--events 32`, the final command should report `32`. The merged archive is
 `/work/generated-depos.npz`, which maps to
 `$LINE_DEPO_OUTPUT/generated-depos.npz` on the host.
 
-## 7. Leave the container
+## 7. Run the complete workflow with one Apptainer command
+
+Instead of entering an interactive shell and running sections 3–6 manually,
+the following single `apptainer exec` invocation creates the temporary venv,
+installs the required Python packages, generates 32 distinct line deposits,
+merges them, and verifies the number of Snakefile outputs.
+
+Run it on the host after completing section 1. The bound output directory must
+be empty of outputs from a previous attempt.
+
+```bash
+apptainer exec \
+  --bind "$PROJECT_DIR/wire-cell-data:/opt/wire-cell-data:ro" \
+  --bind "$PROJECT_DIR:/project:ro" \
+  --bind "$LINE_DEPO_OUTPUT:/work" \
+  --nv \
+  --pwd /work \
+  "$IMAGE" \
+  /usr/local/bin/wirecell-entrypoint bash -lc '
+    set -euo pipefail
+
+    for path in \
+      /work/generated-depos.npz \
+      /work/depo-generation.json \
+      /work/line-depos
+    do
+      if [[ -e "$path" ]]; then
+        echo "Refusing existing output: $path" >&2
+        exit 2
+      fi
+    done
+
+    /opt/wirecell-view/bin/python -m venv /tmp/my-venv
+    source /tmp/my-venv/bin/activate
+    pip install uv
+    ls -lht
+    export UV_CACHE_DIR=/tmp/uv-cache
+
+    uv pip install snakemake
+    uv pip install --only-binary=gojsonnet \
+      "git+https://github.com/WireCell/wire-cell-python.git"
+
+    export WIRECELL_PATH=/opt/wirecell-view/share/wirecell:/opt/wire-cell-toolkit/cfg:/opt/wire-cell-toolkit/spng/cfg:/opt/wire-cell-data
+    export OMP_NUM_THREADS=1
+    export MKL_NUM_THREADS=1
+    export OPENBLAS_NUM_THREADS=1
+
+    SNAKEFILE=/opt/wire-cell-toolkit/spng/test/spng-ssss
+    test -r "$SNAKEFILE"
+    command -v snakemake
+    command -v wcpy
+    snakemake --version
+    wcpy --help >/dev/null
+
+    python /project/scaling/pdhd/generate_line_depos.py \
+      --events 32 \
+      --output /work/generated-depos.npz \
+      --metadata /work/depo-generation.json \
+      --workdir /work/line-depos \
+      --snakefile "$SNAKEFILE"
+
+    test -s /work/generated-depos.npz
+    test -s /work/depo-generation.json
+    count=$(find /work/line-depos/pdhd/line/depo -name data.npz | wc -l)
+    [[ "$count" -eq 32 ]] || {
+      echo "Expected 32 line-deposit archives, found $count" >&2
+      exit 2
+    }
+    echo "PASS: generated and merged $count distinct PDHD line deposits"
+  ' > >(tee "$LINE_DEPO_OUTPUT/interactive-generation.log") 2>&1
+```
+
+Success ends with:
+
+```text
+PASS: generated and merged 32 distinct PDHD line deposits
+```
+
+The host output directory will contain:
+
+```text
+generated-depos.npz
+depo-generation.json
+interactive-generation.log
+line-depos/snakemake.log
+line-depos/pdhd/line/depo/.../data.npz
+line-depos/pdhd/line/depo/.../meta.json
+```
+
+The command installs WireCell Python into the same temporary venv as
+Snakemake. This avoids `uv tool` isolation and prevents `gojsonnet` from being
+built from source. The temporary environment is not part of the retained test
+artifacts; only `/work` outputs are required after the command exits.
+
+## 8. Leave the interactive container
 
 ```bash
 deactivate
