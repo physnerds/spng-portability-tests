@@ -451,6 +451,7 @@ claim physics equivalence from structural validation alone.
 
 ## References
 
+- [Interactive PDHD line-deposit generation in Apptainer](Instructions-For-Interactive-pdhd-line-depo-generation.md)
 - [Condor/SPNG requirements used for this handoff](SKILL-Condor.md)
 - [Reference Perlmutter telemetry report](2026-11-10_17-40-54_UTC-pdhd-61095945-telemetry-performance.md)
 - [Runner test scope and limitations](scaling/pdhd/TESTING.md)
