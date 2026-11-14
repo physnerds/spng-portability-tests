@@ -19,6 +19,15 @@ test -r "$IMAGE"
 test -d "$PROJECT_DIR/wire-cell-data"
 test -r "$PROJECT_DIR/scaling/pdhd/generate_line_depos.py"
 test -r "$PROJECT_DIR/scaling/pdhd/line-depo-template.sh.in"
+
+if [[ -z "${LINE_DEPO_OUTPUT:-}" || "$LINE_DEPO_OUTPUT" == "/" ]]; then
+  echo "Refusing unsafe LINE_DEPO_OUTPUT: ${LINE_DEPO_OUTPUT:-<unset>}" >&2
+  return 2 2>/dev/null || exit 2
+fi
+
+if [[ -e "$LINE_DEPO_OUTPUT" ]]; then
+  rm -rf -- "$LINE_DEPO_OUTPUT"
+fi
 mkdir -p "$LINE_DEPO_OUTPUT"
 ```
 
