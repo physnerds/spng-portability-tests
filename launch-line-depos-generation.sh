@@ -1,8 +1,13 @@
 #!/bin/bash
 
+set -euo pipefail
 
-export PROJECT_DIR="$PWD"
-export IMAGE=/gpfs01/lbne/users/spng/abashyal/image-dir/
+http_proxy=http://proxy.sdcc.bnl.local:3128
+https_proxy=http://proxy.sdcc.bnl.local:3128
+
+
+export PROJECT_DIR=/gpfs/mnt/gpfs01/lbne/users/spng/abashyal/spng-portability-tests # Installation location of spng-portability-tests
+export IMAGE=/gpfs01/lbne/users/spng/abashyal/image-dir/wirecell-spng-cuda89.sif # Location of the SIF Image
 export LINE_DEPO_OUTPUT="$PROJECT_DIR/pdhd-line-depos-interactive"
 
 test -r "$IMAGE"
@@ -73,4 +78,4 @@ apptainer exec \
       exit 2
     }
     echo "PASS: generated and merged $count distinct PDHD line deposits"
-  ' > >(tee "$LINE_DEPO_OUTPUT/interactive-generation.log") 2>&1
+  ' 2>&1 | tee "$LINE_DEPO_OUTPUT/interactive-generation.log"

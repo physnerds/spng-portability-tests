@@ -240,6 +240,8 @@ Run it on the host after completing section 1. The bound output directory must
 be empty of outputs from a previous attempt.
 
 ```bash
+set -o pipefail
+
 apptainer exec \
   --bind "$PROJECT_DIR/wire-cell-data:/opt/wire-cell-data:ro" \
   --bind "$PROJECT_DIR:/project:ro" \
@@ -293,7 +295,7 @@ apptainer exec \
       exit 2
     }
     echo "PASS: generated and merged $count distinct PDHD line deposits"
-  ' > >(tee "$LINE_DEPO_OUTPUT/interactive-generation.log") 2>&1
+  ' 2>&1 | tee "$LINE_DEPO_OUTPUT/interactive-generation.log"
 ```
 
 Success ends with:
